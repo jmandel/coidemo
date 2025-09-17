@@ -1,0 +1,19 @@
+# Node / Bun
+node_modules/
+bun.lock
+
+# Environment files
+.env
+.env.*
+
+# Runtime artifacts
+*.log
+public_disclosures.csv
+public_site/
+data/app.db*
+
+# OS cruft
+.DS_Store
+
+# TypeScript build cache
+*.tsbuildinfo

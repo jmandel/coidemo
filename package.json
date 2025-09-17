@@ -1,0 +1,25 @@
+{
+  "name": "coi-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "seed": "bun run scripts/seed.ts"
+  },
+  "dependencies": {
+    "bun-plugin-tailwind": "^0.0.15",
+    "elysia": "^1.0.28",
+    "openid-client": "^5.6.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.2",
+    "tailwindcss": "^4.1.13"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/react": "^18.2.67",
+    "@types/react-dom": "^18.2.22"
+  }
+}
