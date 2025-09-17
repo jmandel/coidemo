@@ -1,7 +1,7 @@
 import type { FHIRResource } from './db';
 
 export const COI_CANONICAL_URL = 'https://example.org/hl7-coi/Questionnaire/coi';
-export const COI_VERSION = '2025.09.0';
+export const COI_VERSION = '2025.09.1';
 
 export const canonicalQuestionnaire: FHIRResource = {
   resourceType: 'Questionnaire',
@@ -20,17 +20,6 @@ export const canonicalQuestionnaire: FHIRResource = {
       type: 'group',
       required: true,
       item: [
-        {
-          linkId: 'participant.name',
-          text: 'Full name (public)',
-          type: 'string',
-          required: true
-        },
-        {
-          linkId: 'participant.email',
-          text: 'Email (internal)',
-          type: 'string'
-        },
         {
           linkId: 'participant.hl7Roles',
           text: 'HL7 role(s) (public)',

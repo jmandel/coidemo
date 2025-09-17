@@ -1,16 +1,23 @@
 import { Elysia } from 'elysia';
 import { existsSync, mkdirSync } from 'node:fs';
-import { Buffer } from 'node:buffer';
 import homepage from '../frontend/index.html';
 import { FHIRStore, type FHIRResource } from './db';
 import { canonicalQuestionnaire, COI_CANONICAL_URL, COI_VERSION } from './questionnaire';
 import { verifyAuthorization, type AuthenticatedAccessToken } from './auth';
+import { registerMockOidc } from './mock_oidc';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const allowedResourceTypes = new Set(['Questionnaire', 'QuestionnaireResponse']);
 const APP_BASE_URL = process.env.APP_BASE_URL ?? `http://localhost:${PORT}`;
 const MOCK_MODE = process.env.MOCK_AUTH === 'true';
-const MOCK_OIDC_ISSUER = `${APP_BASE_URL}/mock-oidc`;
+const MOCK_OIDC_BASE_PATH = '/mock-oidc';
+const MOCK_OIDC_ISSUER = `${APP_BASE_URL}${MOCK_OIDC_BASE_PATH}`;
+
+if (MOCK_MODE) {
+  process.env.OIDC_ISSUER = MOCK_OIDC_ISSUER;
+  process.env.OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'mock-client';
+  process.env.OIDC_AUDIENCE = process.env.OIDC_CLIENT_ID;
+}
 
 if (!existsSync('./data')) {
   mkdirSync('./data', { recursive: true });
@@ -24,7 +31,11 @@ seedCanonicalQuestionnaire(store);
 const app = new Elysia();
 
 if (MOCK_MODE) {
-  registerMockOidc(app);
+  registerMockOidc(app, {
+    basePath: MOCK_OIDC_BASE_PATH,
+    issuer: process.env.OIDC_ISSUER ?? MOCK_OIDC_ISSUER,
+    defaultClientId: process.env.OIDC_CLIENT_ID ?? 'mock-client'
+  });
 }
 
 app.get('/health', () => ({ ok: true }));
@@ -197,34 +208,18 @@ function seedCanonicalQuestionnaire(store: FHIRStore) {
 }
 
 function toBundle(result: ReturnType<FHIRStore['search']>, searchParams: URLSearchParams, absoluteUrl: string) {
-  const bundle: FHIRResource = {
+  return {
     resourceType: 'Bundle',
     type: 'searchset',
     total: result.total,
-    entry: result.resources.map((resource) => ({ resource })),
     link: [
       {
         relation: 'self',
         url: absoluteUrl
       }
     ],
-    extension: [
-      {
-        url: 'https://hl7.org/fhir/StructureDefinition/bundle-total-accurate',
-        valueBoolean: true
-      }
-    ]
-  } as unknown as FHIRResource;
-
-  const page = searchParams.get('_page');
-  const count = searchParams.get('_count');
-  bundle['meta'] = {
-    tag: [
-      { system: 'https://example.org/fhir/_page', code: page ?? '1' },
-      { system: 'https://example.org/fhir/_count', code: count ?? String(result.limit) }
-    ]
-  };
-  return bundle;
+    entry: result.resources.map((resource) => ({ resource }))
+  } satisfies FHIRResource;
 }
 
 function configResponse() {
@@ -247,8 +242,8 @@ function configJsonResponse() {
 function currentConfig() {
   return {
     fhirBaseUrl: `${APP_BASE_URL}/fhir`,
-    oidcIssuer: MOCK_MODE ? MOCK_OIDC_ISSUER : process.env.OIDC_ISSUER ?? null,
-    oidcClientId: MOCK_MODE ? (process.env.OIDC_CLIENT_ID ?? 'mock-client') : process.env.OIDC_CLIENT_ID ?? null,
+    oidcIssuer: process.env.OIDC_ISSUER ?? null,
+    oidcClientId: process.env.OIDC_CLIENT_ID ?? null,
     oidcRedirectUri: process.env.OIDC_REDIRECT_URI ?? `${APP_BASE_URL}/`,
     mockAuth: MOCK_MODE,
     questionnaire: {
@@ -256,161 +251,4 @@ function currentConfig() {
       version: COI_VERSION
     }
   };
-}
-
-type MockCodePayload = {
-  claims: Record<string, unknown>;
-  issuedAt: number;
-  redirectUri: string;
-  clientId?: string | null;
-  scope?: string | null;
-};
-
-function registerMockOidc(app: Elysia) {
-  const jsonHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
-  app.get('/mock-oidc/.well-known/openid-configuration', () => {
-    const metadata = {
-      issuer: MOCK_OIDC_ISSUER,
-      authorization_endpoint: `${MOCK_OIDC_ISSUER}/authorize`,
-      token_endpoint: `${MOCK_OIDC_ISSUER}/token`,
-      jwks_uri: `${MOCK_OIDC_ISSUER}/jwks`,
-      response_types_supported: ['code'],
-      subject_types_supported: ['public'],
-      id_token_signing_alg_values_supported: ['none'],
-      scopes_supported: ['openid', 'profile', 'email'],
-      token_endpoint_auth_methods_supported: ['none']
-    };
-    return new Response(JSON.stringify(metadata), { status: 200, headers: jsonHeaders });
-  });
-
-  app.get('/mock-oidc/jwks', () => {
-    return new Response(JSON.stringify({ keys: [] }), { status: 200, headers: jsonHeaders });
-  });
-
-  app.get('/mock-oidc/authorize', ({ request }) => {
-    const url = new URL(request.url);
-    const redirectUri = url.searchParams.get('redirect_uri');
-    if (!redirectUri) {
-      return new Response('missing redirect_uri', { status: 400 });
-    }
-    const state = url.searchParams.get('state');
-    const claims = decodeMockClaims(url.searchParams.get('mock_jwk_claims'));
-    const payload: MockCodePayload = {
-      claims,
-      issuedAt: Date.now(),
-      redirectUri,
-      clientId: url.searchParams.get('client_id'),
-      scope: url.searchParams.get('scope')
-    };
-    const code = base64UrlEncodeString(JSON.stringify(payload));
-    const location = appendAuthParams(redirectUri, code, state);
-    return new Response(null, {
-      status: 302,
-      headers: { Location: location }
-    });
-  });
-
-  app.post('/mock-oidc/token', async ({ request }) => {
-    const body = await request.text();
-    const form = new URLSearchParams(body);
-    const codeParam = form.get('code');
-    if (!codeParam) {
-      return new Response('invalid_grant', { status: 400 });
-    }
-    const payload = decodeCodePayload(codeParam);
-    if (!payload) {
-      return new Response('invalid_grant', { status: 400 });
-    }
-    const clientId = form.get('client_id') ?? payload.clientId ?? process.env.OIDC_CLIENT_ID ?? 'mock-client';
-    const scope = form.get('scope') ?? payload.scope ?? 'openid profile email';
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const claims = materializeClaims(payload.claims);
-    const tokenClaims = {
-      ...claims,
-      iss: MOCK_OIDC_ISSUER,
-      aud: clientId,
-      iat: nowSeconds,
-      exp: nowSeconds + 3600
-    };
-    const encodedPayload = base64UrlEncodeString(JSON.stringify(tokenClaims));
-    const accessToken = encodedPayload;
-    const idToken = `eyJhbGciOiJub25lIn0.${encodedPayload}.`;
-    const responseBody = {
-      access_token: accessToken,
-      token_type: 'Bearer',
-      expires_in: 3600,
-      scope,
-      id_token: idToken
-    };
-    return new Response(JSON.stringify(responseBody), { status: 200, headers: jsonHeaders });
-  });
-}
-
-function appendAuthParams(redirectUri: string, code: string, state: string | null): string {
-  try {
-    const url = new URL(redirectUri);
-    url.searchParams.set('code', code);
-    if (state) url.searchParams.set('state', state);
-    return url.toString();
-  } catch {
-    const params = new URLSearchParams();
-    params.set('code', code);
-    if (state) params.set('state', state);
-    const separator = redirectUri.includes('?') ? '&' : '?';
-    return `${redirectUri}${separator}${params.toString()}`;
-  }
-}
-
-function decodeMockClaims(raw: string | null): Record<string, unknown> {
-  if (!raw) {
-    return { sub: 'mock-user', name: 'Mock User' };
-  }
-  try {
-    const json = base64UrlDecodeString(raw);
-    const parsed = JSON.parse(json);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore
-  }
-  return { sub: 'mock-user', name: 'Mock User' };
-}
-
-function decodeCodePayload(code: string): MockCodePayload | null {
-  try {
-    const json = base64UrlDecodeString(code);
-    const parsed = JSON.parse(json);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const obj = parsed as Record<string, unknown>;
-    const claims = obj.claims && typeof obj.claims === 'object' && !Array.isArray(obj.claims)
-      ? (obj.claims as Record<string, unknown>)
-      : {};
-    const redirectUri = typeof obj.redirectUri === 'string' ? obj.redirectUri : '';
-    const issuedAt = typeof obj.issuedAt === 'number' ? obj.issuedAt : Date.now();
-    const clientId = typeof obj.clientId === 'string' ? obj.clientId : null;
-    const scope = typeof obj.scope === 'string' ? obj.scope : null;
-    return { claims, issuedAt, redirectUri, clientId, scope };
-  } catch {
-    return null;
-  }
-}
-
-function materializeClaims(raw: Record<string, unknown>): Record<string, unknown> {
-  const base = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const claims = { sub: 'mock-user', name: 'Mock User', ...base } as Record<string, unknown>;
-  if (typeof claims.sub !== 'string' || !claims.sub) claims.sub = 'mock-user';
-  if (typeof claims.name !== 'string' || !claims.name) claims.name = 'Mock User';
-  return claims;
-}
-
-function base64UrlEncodeString(value: string): string {
-  return Buffer.from(value, 'utf-8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function base64UrlDecodeString(value: string): string {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-  const padLength = (4 - (normalized.length % 4)) % 4;
-  const padded = normalized + '='.repeat(padLength);
-  return Buffer.from(padded, 'base64').toString('utf-8');
 }

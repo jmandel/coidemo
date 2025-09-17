@@ -10,7 +10,7 @@ bun.lock
 *.log
 public_disclosures.csv
 public_site/
-data/app.db*
+data/
 
 # OS cruft
 .DS_Store
