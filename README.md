@@ -1,78 +1,45 @@
-# COI Disclosure Portal (Bun.ts + Elysia + SQLite + React/Vite)
+# COI Disclosure FHIR façade (Bun + Elysia + React)
 
-A minimal, secure, and maintainable web application for HL7-style Conflict of Interest (COI) disclosures.
+This revision exposes a minimal FHIR façade for Conflict of Interest (COI) disclosures. All data is kept as raw JSON FHIR resources in SQLite, and the React single-page app reads/writes QuestionnaireResponses using OAuth2 (Authorization Code + PKCE).
 
-- Backend: Bun.ts + Elysia, SQLite (via `bun:sqlite`), cookie-based sessions, OIDC via `openid-client`.
-- Frontend: React + Vite (SPA).
-- Reporting: One-click **Generate Public Report** (sanitized CSV) + **static site** generator in `public_site/`.
-- Simplicity: No frameworks beyond Elysia and a handful of small libs; prepared statements used; ~well under 10k LOC.
-
-> Note: You must supply your OIDC details and seed authorized users. See **Setup**.
+- Backend: Bun + Elysia + `bun:sqlite`
+- Data model: single `resources` table storing full FHIR JSON
+- Resource types: `Questionnaire`, `QuestionnaireResponse`
+- Frontend: static React SPA that talks to `/fhir`
 
 ## Setup
 
-### 1) Prerequisites
-- Bun >= 1.1 (https://bun.sh)
-- (Optional) Node-compatible toolchain for building the React SPA (handled by Bun)
+1. Install Bun (https://bun.sh) and run `bun install`
+2. Copy env vars: `cp .env.sample .env` and edit as needed
+3. Start the server: `bun run src/server.ts`
+4. Visit `http://localhost:3000`
 
-### 2) Configure environment
-Copy `.env.sample` to `.env` and set values:
-```bash
-cp .env.sample .env
-# then edit .env
-```
+The server seeds the canonical HL7 COI Questionnaire on first boot and serves the SPA from `/frontend/index.html`. No separate build step is required.
 
-### 3) Install dependencies
-```bash
-bun install
-```
+## Authentication
 
-### 4) Initialize database and seed users
-```bash
-bun run scripts/seed.ts
-```
+- `MOCK_AUTH=true` (default in `.env.sample`) enables an in-process mock OIDC provider at `/mock-oidc`. The SPA still runs an Authorization Code + PKCE flow; the mock `authorize` endpoint simply reflects a `mock_jwk_claims` parameter (base64url JSON) into the authorization `code` and the token response, so you can supply any claims you need when testing.
+- With `MOCK_AUTH=false`, supply `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_AUDIENCE`, and `OIDC_REDIRECT_URI`. The SPA performs Authorization Code + PKCE and exchanges the code for tokens. The Bun server validates access tokens via JWKS using `jose`.
 
-### 5) Start server
-```bash
-MOCK_AUTH=true bun run src/server.ts
-# visit http://localhost:3000
-```
+## FHIR API surface
 
-> The frontend is bundled automatically by Bun when you import `frontend/index.html` inside the server. No separate build step is required.
+- `GET /fhir/Questionnaire` – supports `url`, `version`, `status`, `_id`
+- `GET /fhir/QuestionnaireResponse` – supports `subject:identifier`, `status`, `questionnaire`, `authored`
+- `POST /fhir/{type}` and `PUT /fhir/{type}/{id}` – latest write wins, no `_history`
 
-### 6) Admin: generate public outputs
-In the Admin Dashboard click **Generate Public Report**, or run:
-```bash
-bun run scripts/generate_public.ts
-# Outputs: ./public_disclosures.csv and ./public_site/
-```
+QuestionnaireResponses include `item.text` copied from the Questionnaire so that every response renders independently of the canonical form. Searches are backed by JSON expression indexes tailored to the supported parameters.
 
-## Environment Variables
-See `.env.sample` for a complete list. Required values typically include:
-- APP_BASE_URL (e.g., http://localhost:3000)
-- SESSION_SECRET (random string; at least 32 chars)
-- OIDC_ISSUER (e.g., https://oidc.hl7.example)
-- OIDC_CLIENT_ID
-- OIDC_CLIENT_SECRET
-- OIDC_REDIRECT_URI (e.g., http://localhost:3000/auth/callback)
-- MOCK_AUTH (set to `true` to bypass OIDC during local testing; see below)
+## Environment variables
 
-## Mocking OIDC locally
-Set `MOCK_AUTH=true` in your environment to skip the external OIDC flow while testing. When enabled, use the mock login shortcuts on the home page or call `/auth/login` with explicit user details to create a session:
+- `APP_BASE_URL` – base URL reported to the SPA (defaults to `http://localhost:3000`)
+- `PORT` – server port (`3000` by default)
+- `MOCK_AUTH` – set to `false` to require real OIDC tokens
+- `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_AUDIENCE`, `OIDC_REDIRECT_URI` – required when `MOCK_AUTH=false`
 
-```
-/auth/login?email=test@example.org&name=Test%20User&hl7_id=mock|1&org_role=TSC&admin=true
-```
+## Development notes
 
-If `admin=true` is present, the user is marked as an admin. All parameters are optional except `email` when calling the endpoint directly.
+- All FHIR data lives in `./data/fhir.db`
+- CSV/static-site generation from earlier iterations has been removed
+- Type-check with `bunx tsc --noEmit`
 
-## Security
-- Passwords are never stored; OIDC-only login.
-- Sessions use httpOnly, Secure cookies (set Secure=false on local dev if needed via env flag).
-- SQL is executed via prepared statements to mitigate injection risks.
-- Public outputs remove dollar amounts and private details; NDA-restricted items appear as sector + topic.
-
-## Notes
-- This project stores SQLite at `./data/app.db` (outside of any web root) and serves static files only from the Bun server (React app via HTML imports) and `./public_site` (the latter is intended for separate hosting).
-- The static site is generated by reading **the sanitized CSV**, per policy.
-- Feel free to evolve schema and UI to fit production workflows.
+Extend the façade with additional resource types or search parameters as needed for your workflow.

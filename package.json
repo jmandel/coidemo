@@ -5,21 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/server.ts",
-    "start": "bun run src/server.ts",
-    "seed": "bun run scripts/seed.ts"
+    "start": "bun run src/server.ts"
   },
   "dependencies": {
-    "bun-plugin-tailwind": "^0.0.15",
     "elysia": "^1.0.28",
-    "openid-client": "^5.6.5",
+    "jose": "^6.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.22.2",
-    "tailwindcss": "^4.1.13"
+    "react-router-dom": "^6.22.2"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
+    "@types/bun": "^1.2.22",
     "@types/react": "^18.2.67",
-    "@types/react-dom": "^18.2.22"
+    "@types/react-dom": "^18.2.22",
+    "typescript": "^5.4.0"
   }
 }

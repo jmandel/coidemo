@@ -1,104 +1,129 @@
-import { env, randomId } from './utils';
-import { Issuer, generators } from 'openid-client';
-import type { DB } from './db';
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { Buffer } from 'node:buffer';
+import { env } from './utils';
 
-type OIDCClient = {
-  authorizeURL: (state: string, code_challenge: string) => string;
-  callback: (params: { state: string; code: string; code_verifier: string }) => Promise<{
-    sub: string; email?: string; name?: string;
-  }>;
+export type AuthenticatedAccessToken = {
+  subjectSystem: string;
+  subjectValue: string;
+  display: string | null;
+  payload: JWTPayload;
+  token: string;
 };
 
-let cachedClient: OIDCClient | null = null;
+let remoteJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+let jwksInitPromise: Promise<ReturnType<typeof createRemoteJWKSet>> | null = null;
 
-export async function getOIDC(): Promise<OIDCClient> {
-  if (cachedClient) return cachedClient;
-  const issuerUrl = env('OIDC_ISSUER');
-  const clientId = env('OIDC_CLIENT_ID');
-  const clientSecret = env('OIDC_CLIENT_SECRET');
-  const redirectUri = env('OIDC_REDIRECT_URI');
+const allowMock = process.env.MOCK_AUTH === 'true';
+const issuer = allowMock ? 'urn:mock' : env('OIDC_ISSUER');
+const audience = allowMock ? 'urn:mock:audience' : env('OIDC_AUDIENCE');
+const explicitJwksUri = allowMock ? null : process.env.OIDC_JWKS_URI ?? null;
 
-  const issuer = await Issuer.discover(issuerUrl);
-  const client = new issuer.Client({
-    client_id: clientId,
-    client_secret: clientSecret,
-    redirect_uris: [redirectUri],
-    response_types: ['code']
-  });
+async function resolveJwks(): Promise<ReturnType<typeof createRemoteJWKSet>> {
+  if (allowMock) {
+    throw new Error('JWKS not available in mock mode');
+  }
+  if (remoteJwks) return remoteJwks;
+  if (jwksInitPromise) return jwksInitPromise;
 
-  cachedClient = {
-    authorizeURL: (state: string, code_challenge: string) => {
-      const url = client.authorizationUrl({
-        scope: 'openid email profile',
-        state,
-        code_challenge,
-        code_challenge_method: 'S256'
-      });
-      return url;
-    },
-    callback: async ({ state, code, code_verifier }) => {
-      const tokenSet = await client.callback(redirectUri, { code, state }, { code_verifier });
-      const userinfo = await client.userinfo(tokenSet.access_token!);
-      return {
-        sub: (userinfo.sub as string) ?? '',
-        email: (userinfo.email as string | undefined),
-        name: (userinfo.name as string | undefined)
-      };
-    }
-  };
+  jwksInitPromise = (async () => {
+    const jwksUrl = explicitJwksUri ?? await discoverJwksUri(issuer);
+    const jwks = createRemoteJWKSet(new URL(jwksUrl));
+    remoteJwks = jwks;
+    return jwks;
+  })();
 
-  return cachedClient;
+  return jwksInitPromise;
 }
 
-// Helpers to store ephemeral OIDC state in cookies (signed state is out of scope; running on same origin only).
-export function createOIDCStateCookies() {
-  const state = generators.state();
-  const code_verifier = generators.codeVerifier();
-  const code_challenge = generators.codeChallenge(code_verifier);
-  const value = Buffer.from(JSON.stringify({ state, code_verifier })).toString('base64url');
-  return { state, code_challenge, cookieValue: value };
+async function discoverJwksUri(iss: string): Promise<string> {
+  const base = iss.endsWith('/') ? iss : `${iss}/`;
+  const wellKnown = new URL('.well-known/openid-configuration', base).toString();
+  const res = await fetch(wellKnown, { headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    throw new Error(`Failed to retrieve OIDC discovery document (${res.status})`);
+  }
+  const json = (await res.json()) as { jwks_uri?: string };
+  if (!json.jwks_uri) {
+    throw new Error('OIDC discovery document missing jwks_uri');
+  }
+  return json.jwks_uri;
 }
 
-export function readOIDCStateCookie(cookie: string | null) {
-  if (!cookie) return null;
+function parseBearer(header: string | null | undefined): string | null {
+  if (!header) return null;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) return null;
+  return match[1];
+}
+
+export async function verifyAuthorization(header: string | null | undefined): Promise<AuthenticatedAccessToken | null> {
+  if (allowMock) {
+    const token = parseBearer(header);
+    if (!token) return null;
+    const claims = decodeMockToken(token);
+    if (!claims) return null;
+    const sub = typeof claims.sub === 'string' && claims.sub.length > 0 ? claims.sub : 'mock-user';
+    const issuerValue = typeof claims.iss === 'string' && claims.iss.length > 0 ? claims.iss : 'urn:mock';
+    const display = stringifyDisplay(claims) ?? sub;
+    return {
+      subjectSystem: `${issuerValue}#sub`,
+      subjectValue: sub,
+      display,
+      payload: claims,
+      token
+    };
+  }
+
+  const token = parseBearer(header);
+  if (!token) return null;
+
+  const jwks = await resolveJwks();
   try {
-    const json = Buffer.from(cookie, 'base64url').toString('utf-8');
-    return JSON.parse(json) as { state: string; code_verifier: string };
-  } catch {
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer,
+      audience
+    });
+    const sub = payload.sub;
+    if (!sub) {
+      throw new Error('JWT missing subject');
+    }
+    const display = stringifyDisplay(payload);
+    return {
+      subjectSystem: `${issuer}#sub`,
+      subjectValue: sub,
+      display,
+      payload,
+      token
+    };
+  } catch (error) {
+    console.error('Token verification failed', error);
     return null;
   }
 }
 
-export async function handleLoginRedirect(baseUrl: string) {
-  const { state, code_challenge, cookieValue } = createOIDCStateCookies();
-  const client = await getOIDC();
-  const url = client.authorizeURL(state, code_challenge);
-  return { url, cookieValue };
+function stringifyDisplay(payload: JWTPayload): string | null {
+  if (typeof payload.name === 'string') return payload.name;
+  if (typeof payload.preferred_username === 'string') return payload.preferred_username;
+  if (typeof payload.email === 'string') return payload.email;
+  return null;
 }
 
-export async function handleCallback(db: DB, params: URLSearchParams, oidcCookie: string | null) {
-  const state = params.get('state') ?? '';
-  const code = params.get('code') ?? '';
-  const st = readOIDCStateCookie(oidcCookie);
-  if (!st || st.state !== state) throw new Error('Invalid OIDC state');
-
-  const client = await getOIDC();
-  const profile = await client.callback({ state, code, code_verifier: st.code_verifier });
-
-  // Map OIDC profile to user (must already be authorized in DB)
-  const hl7_id = profile.sub;
-  const email = profile.email ?? '';
-  const name = profile.name ?? email ?? 'Unknown';
-
-  // Upsert user basic info (org_role default TSC if unknown)
-  const user = db.createOrUpdateUser({ hl7_id, email, name });
-
-  // Optional: auto-admin by email list
-  const seedAdmins = (process.env.SEED_ADMIN_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (seedAdmins.includes((email ?? '').toLowerCase())) {
-    db.setAdminByEmail(email);
-    const refreshed = db.getUserById(user.id)!;
-    return refreshed;
+function decodeMockToken(token: string): JWTPayload | null {
+  try {
+    const json = base64UrlDecode(token);
+    const parsed = JSON.parse(json);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as JWTPayload;
+    }
+  } catch (error) {
+    console.error('Failed to decode mock token', error);
   }
-  return user;
+  return null;
+}
+
+function base64UrlDecode(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padLength = (4 - (normalized.length % 4)) % 4;
+  const padded = normalized + '='.repeat(padLength);
+  return Buffer.from(padded, 'base64').toString('utf-8');
 }

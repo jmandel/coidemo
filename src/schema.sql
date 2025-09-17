@@ -1,34 +1,40 @@
-PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  hl7_id TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL,
-  org_role TEXT NOT NULL,             -- Board, Officer, Exec, TSC, ProductDirector, ProgramChair, CoChair
-  is_admin INTEGER NOT NULL DEFAULT 0,
-  is_discloser INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS resources (
+  id   TEXT PRIMARY KEY,
+  json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL UNIQUE,
-  user_id INTEGER NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+CREATE INDEX IF NOT EXISTS idx_res_type
+  ON resources (json_extract(json, '$.resourceType'));
 
-CREATE TABLE IF NOT EXISTS disclosures (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL UNIQUE,
-  draft_json TEXT,
-  draft_saved_at TEXT,
-  history_json TEXT NOT NULL DEFAULT '[]',
-  last_submitted_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+CREATE INDEX IF NOT EXISTS idx_questionnaire_url_version_status
+  ON resources (
+    json_extract(json, '$.resourceType'),
+    json_extract(json, '$.url'),
+    json_extract(json, '$.version'),
+    json_extract(json, '$.status')
+  );
+
+CREATE INDEX IF NOT EXISTS idx_qr_subject_identifier_status
+  ON resources (
+    json_extract(json, '$.resourceType'),
+    json_extract(json, '$.subject.identifier.system'),
+    json_extract(json, '$.subject.identifier.value'),
+    json_extract(json, '$.status')
+  );
+
+CREATE INDEX IF NOT EXISTS idx_qr_questionnaire_subject_status
+  ON resources (
+    json_extract(json, '$.resourceType'),
+    json_extract(json, '$.questionnaire'),
+    json_extract(json, '$.subject.identifier.system'),
+    json_extract(json, '$.subject.identifier.value'),
+    json_extract(json, '$.status')
+  );
+
+CREATE INDEX IF NOT EXISTS idx_qr_authored
+  ON resources (
+    json_extract(json, '$.resourceType'),
+    json_extract(json, '$.authored')
+  );
