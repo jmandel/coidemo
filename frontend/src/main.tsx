@@ -181,6 +181,7 @@ const fieldLabelClass = 'block text-sm font-medium text-slate-700';
 const fieldInputClass = 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200';
 const selectInputClass = `${fieldInputClass} bg-white`;
 const checkboxInputClass = 'h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-200 focus:outline-none';
+const sectionCardGap = 24;
 
 function formatDateTime(value?: string | null) {
   if (!value) return '';
@@ -884,25 +885,23 @@ function FormPage() {
 
       {step === 0 && (
         <>
-          <div className="card">
-            <h2>Community disclosures</h2>
-            <p className="small">Your name and HL7 roles will be published. Funding and other interests appear on the public register once you submit.</p>
+          <div className="space-y-6">
+            {historyList.length > 0 ? (
+              <HistoryCard
+                history={historyList}
+                onLoad={(key) => {
+                  void loadFromHistory(key);
+                }}
+              />
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 className="text-base font-semibold text-slate-800">Sample submission</h3>
+                <p className="small" style={{ marginTop: 8 }}>Need an example to get started? Load a sample disclosure and edit from there.</p>
+                <button className="secondary" style={{ marginTop: 16 }} onClick={() => { void loadSample(); }}>Load sample submission</button>
+              </div>
+            )}
+            <ParticipantSection document={document} updateDocument={updateDocument} />
           </div>
-          {historyList.length > 0 ? (
-            <HistoryCard
-              history={historyList}
-              onLoad={(key) => {
-                void loadFromHistory(key);
-              }}
-            />
-          ) : (
-            <div className="card">
-              <h2>Sample submission</h2>
-              <p className="small">Need an example to get started? Load a sample disclosure and edit from there.</p>
-              <button className="secondary" onClick={() => { void loadSample(); }}>Load sample submission</button>
-            </div>
-          )}
-          <ParticipantSection document={document} updateDocument={updateDocument} />
           {renderNavigationCard(null, 1, { nextDisabled: !canAdvanceIntro })}
         </>
       )}
@@ -1062,13 +1061,19 @@ function RolesSection({ document, updateDocument }: SectionProps) {
           <h2>Professional roles</h2>
           <p className="small">Include primary employer and governance/advisory roles meeting the disclosure threshold.</p>
         </div>
-        <button className="secondary" onClick={addRole}>Add role</button>
       </div>
-      {document.roles.length === 0 ? (
-        <p className="small">No roles added yet.</p>
-      ) : (
-        document.roles.map((role, idx) => (
-          <div key={idx} className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {document.roles.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-sm text-slate-600">
+            No roles added yet.
+          </div>
+        ) : null}
+        {document.roles.map((role, idx) => (
+          <div
+            key={idx}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6"
+            style={{ marginBottom: idx === document.roles.length - 1 ? 0 : sectionCardGap }}
+          >
             <div className="flex items-start justify-between gap-4">
               <div className="text-base font-semibold text-slate-800">Role {idx + 1}</div>
               <button className="ghost text-sm" onClick={() => removeRole(idx)}>Remove</button>
@@ -1158,8 +1163,11 @@ function RolesSection({ document, updateDocument }: SectionProps) {
               </div>
             </div>
           </div>
-        ))
-      )}
+        ))}
+        <div className="flex justify-end" style={{ marginTop: 16 }}>
+          <button className="secondary" onClick={addRole}>Add role</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1188,13 +1196,19 @@ function FinancialSection({ document, updateDocument }: SectionProps) {
           <h2>Funding sources</h2>
           <p className="small">Report sources meeting the HL7 disclosure threshold in the prior 12 months.</p>
         </div>
-        <button className="secondary" onClick={addEntry}>Add source</button>
       </div>
-      {document.financial.length === 0 ? (
-        <p className="small">No funding sources listed.</p>
-      ) : (
-        document.financial.map((entry, idx) => (
-          <div key={idx} className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {document.financial.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-sm text-slate-600">
+            No funding sources listed.
+          </div>
+        ) : null}
+        {document.financial.map((entry, idx) => (
+          <div
+            key={idx}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6"
+            style={{ marginBottom: idx === document.financial.length - 1 ? 0 : sectionCardGap }}
+          >
             <div className="flex items-start justify-between gap-4">
               <div className="text-base font-semibold text-slate-800">Source {idx + 1}</div>
               <button className="ghost text-sm" onClick={() => removeEntry(idx)}>Remove</button>
@@ -1255,8 +1269,11 @@ function FinancialSection({ document, updateDocument }: SectionProps) {
               ) : null}
             </div>
           </div>
-        ))
-      )}
+        ))}
+        <div className="flex justify-end" style={{ marginTop: 16 }}>
+          <button className="secondary" onClick={addEntry}>Add source</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1285,13 +1302,19 @@ function OwnershipSection({ document, updateDocument }: SectionProps) {
           <h2>Ownership interests (≥ 1%)</h2>
           <p className="small">List entities where you own at least 1%.</p>
         </div>
-        <button className="secondary" onClick={addEntry}>Add ownership</button>
       </div>
-      {document.ownerships.length === 0 ? (
-        <p className="small">No ownership interests listed.</p>
-      ) : (
-        document.ownerships.map((entry, idx) => (
-          <div key={idx} className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {document.ownerships.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-sm text-slate-600">
+            No ownership interests listed.
+          </div>
+        ) : null}
+        {document.ownerships.map((entry, idx) => (
+          <div
+            key={idx}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6"
+            style={{ marginBottom: idx === document.ownerships.length - 1 ? 0 : sectionCardGap }}
+          >
             <div className="flex items-start justify-between gap-4">
               <div className="text-base font-semibold text-slate-800">Ownership {idx + 1}</div>
               <button className="ghost text-sm" onClick={() => removeEntry(idx)}>Remove</button>
@@ -1340,8 +1363,11 @@ function OwnershipSection({ document, updateDocument }: SectionProps) {
               </div>
             </div>
           </div>
-        ))
-      )}
+        ))}
+        <div className="flex justify-end" style={{ marginTop: 16 }}>
+          <button className="secondary" onClick={addEntry}>Add ownership</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1369,13 +1395,19 @@ function GiftsSection({ document, updateDocument }: SectionProps) {
           <h2>Sponsored travel, gifts & hospitality</h2>
           <p className="small">Include sponsors exceeding $10k from a single source in a calendar year.</p>
         </div>
-        <button className="secondary" onClick={addEntry}>Add sponsor</button>
       </div>
-      {document.gifts.length === 0 ? (
-        <p className="small">No entries.</p>
-      ) : (
-        document.gifts.map((entry, idx) => (
-          <div key={idx} className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {document.gifts.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-sm text-slate-600">
+            No entries yet.
+          </div>
+        ) : null}
+        {document.gifts.map((entry, idx) => (
+          <div
+            key={idx}
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6"
+            style={{ marginBottom: idx === document.gifts.length - 1 ? 0 : sectionCardGap }}
+          >
             <div className="flex items-start justify-between gap-4">
               <div className="text-base font-semibold text-slate-800">Sponsor {idx + 1}</div>
               <button className="ghost text-sm" onClick={() => removeEntry(idx)}>Remove</button>
@@ -1410,8 +1442,11 @@ function GiftsSection({ document, updateDocument }: SectionProps) {
               </div>
             </div>
           </div>
-        ))
-      )}
+        ))}
+        <div className="flex justify-end" style={{ marginTop: 16 }}>
+          <button className="secondary" onClick={addEntry}>Add sponsor</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1419,10 +1454,12 @@ function GiftsSection({ document, updateDocument }: SectionProps) {
 function HistoryCard({ history, onLoad }: { history: CompletedHistoryEntry[]; onLoad: (key: string) => void | Promise<void> }) {
   if (history.length === 0) return null;
   return (
-    <div className="card">
-      <h2>Previous submissions</h2>
-      <p className="small">Select a prior submission to load it as a starting point for this year.</p>
-      <ul className="historyLinks">
+    <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-slate-800">Previous submissions</h2>
+        <p className="small" style={{ marginTop: 6 }}>Select a prior submission to load it as a starting point for this year.</p>
+      </div>
+      <ul className="flex flex-col gap-3">
         {history.map((entry, idx) => {
           const authored = entry.response.authored ?? entry.response.meta?.lastUpdated ?? '';
           const label = authored ? formatDateTime(authored) : `Submission ${history.length - idx}`;
@@ -1430,9 +1467,9 @@ function HistoryCard({ history, onLoad }: { history: CompletedHistoryEntry[]; on
           const summary = formatSummaryCounts(counts);
           const key = entry.key || `${idx}-${label}`;
           return (
-            <li key={key}>
-              <div>
-                <div>{label}</div>
+            <li key={key} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3">
+              <div className="min-w-0">
+                <div className="font-medium text-slate-800">{label}</div>
                 <div className="small">{summary}</div>
               </div>
               <button className="secondary" onClick={() => { void onLoad(key); }}>Load submission</button>
