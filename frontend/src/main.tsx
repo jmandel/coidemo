@@ -678,8 +678,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         const name = window.prompt('Display name', defaults.name ?? email) ?? email;
         const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
         const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
-        const accessToken = encodeMockClaims(claims);
-        const tokens: StoredTokens = { accessToken };
+        const tokens = createMockTokens(claims, config);
         setStoredTokens(tokens);
         establishAuthFromTokens(tokens);
         performPostLoginRedirect();
@@ -2488,9 +2487,33 @@ function base64UrlEncode(bytes: Uint8Array): string {
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function encodeMockClaims(claims: Record<string, unknown>): string {
-  const json = JSON.stringify(claims);
-  return base64UrlEncode(new TextEncoder().encode(json));
+function createMockTokens(claims: Record<string, unknown>, config: AppConfig): StoredTokens {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const issuer = config.oidcIssuer ?? 'urn:mock';
+  const audience = config.oidcClientId ?? 'mock-client';
+  const subject = typeof claims.sub === 'string' && claims.sub.length > 0 ? claims.sub : 'mock-user';
+  const payload = {
+    ...claims,
+    sub: subject,
+    iss: issuer,
+    aud: audience,
+    iat: nowSeconds,
+    exp: nowSeconds + 3600
+  } satisfies Record<string, unknown>;
+  const idToken = createMockJwt(payload);
+  const accessToken = createMockJwt({ ...payload, scope: 'openid profile email' });
+  return {
+    accessToken,
+    idToken,
+    expiresAt: Date.now() + 3600 * 1000
+  } satisfies StoredTokens;
+}
+
+function createMockJwt(payload: Record<string, unknown>): string {
+  const header = { alg: 'none', typ: 'JWT' } satisfies Record<string, unknown>;
+  const encodedHeader = base64UrlEncode(new TextEncoder().encode(JSON.stringify(header)));
+  const encodedPayload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  return `${encodedHeader}.${encodedPayload}.`;
 }
 
 function defaultMockClaims(): { sub: string; email: string; name: string; preferred_username: string } {
