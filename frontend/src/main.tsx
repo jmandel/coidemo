@@ -21,12 +21,15 @@ import {
   startLogin as oauthStartLogin,
   handleRedirect
 } from './oauth';
+import { getBasePath, stripBasePath, withBasePath } from './basePath';
 
 declare global {
   interface Window {
     __APP_CONFIG?: AppConfig;
   }
 }
+
+const BASE_PATH = getBasePath();
 
 export type Questionnaire = {
   resourceType: 'Questionnaire';
@@ -587,12 +590,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     const idClaims = tokens.idToken ? decodeIdToken(tokens.idToken) : null;
     const accessClaims = decodeAccessToken(tokens.accessToken);
     const config = window.__APP_CONFIG ?? {
-      fhirBaseUrl: '/fhir',
+      fhirBaseUrl: withBasePath('fhir'),
       oidcIssuer: null,
       oidcClientId: null,
-      oidcRedirectUri: window.location.origin,
+      oidcRedirectUri: `${window.location.origin}${BASE_PATH === '/' ? '/' : `${BASE_PATH}/`}`,
       mockAuth: true,
       staticMode: false,
+      basePath: BASE_PATH,
       questionnaire: null,
       questionnaireResource: null
     } satisfies AppConfig;
@@ -657,8 +661,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!window.__APP_CONFIG) {
         window.__APP_CONFIG = config;
       }
-      const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, currentLocation);
+      const relativePath = stripBasePath(window.location.pathname);
+      const redirectTarget = `${relativePath}${window.location.search ?? ''}${window.location.hash ?? ''}`;
+      sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectTarget);
       if (config.staticMode && config.mockAuth) {
         const defaults = defaultMockClaims();
         const email = window.prompt('Mock email address', defaults.email) ?? '';
@@ -715,8 +720,9 @@ function useAuth() {
 }
 
 function App() {
+  const basename = BASE_PATH === '/' ? undefined : BASE_PATH;
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <AuthProvider>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -734,10 +740,11 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { status, user, login, logout } = useAuth();
   const location = useLocation();
   const navIsActive = useCallback((path: string) => {
+    const current = stripBasePath(location.pathname);
     if (path === '/') {
-      return location.pathname === '/';
+      return current === '/';
     }
-    return location.pathname === path || location.pathname.startsWith(`${path}/`);
+    return current === path || current.startsWith(`${path}/`);
   }, [location.pathname]);
   return (
     <div>
