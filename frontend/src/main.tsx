@@ -21,7 +21,6 @@ import {
   startLogin as oauthStartLogin,
   handleRedirect
 } from './oauth';
-import { getBasePath, stripBasePath, withBasePath } from './basePath';
 
 declare global {
   interface Window {
@@ -29,7 +28,19 @@ declare global {
   }
 }
 
-const BASE_PATH = getBasePath();
+const documentBase = new URL(document.baseURI);
+const routerBasename = documentBase.pathname.replace(/\/$/, '') || '/';
+
+const absolutePath = (relative: string) => new URL(relative, documentBase).pathname;
+
+const relativeToBase = (pathname: string): string => {
+  const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  if (routerBasename === '/' || !normalized.startsWith(routerBasename)) {
+    return normalized;
+  }
+  const stripped = normalized.slice(routerBasename.length);
+  return stripped.startsWith('/') ? stripped || '/' : `/${stripped}`;
+};
 
 export type Questionnaire = {
   resourceType: 'Questionnaire';
@@ -588,25 +599,21 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const idClaims = tokens.idToken ? decodeIdToken(tokens.idToken) : null;
-    const accessClaims = decodeAccessToken(tokens.accessToken);
     const config = window.__APP_CONFIG ?? {
-      fhirBaseUrl: withBasePath('fhir'),
+      fhirBaseUrl: absolutePath('./fhir'),
       oidcIssuer: null,
       oidcClientId: null,
-      oidcRedirectUri: `${window.location.origin}${BASE_PATH === '/' ? '/' : `${BASE_PATH}/`}`,
+      oidcRedirectUri: new URL('./', documentBase).toString(),
       mockAuth: true,
       staticMode: false,
-      basePath: BASE_PATH,
       questionnaire: null,
       questionnaireResource: null
     } satisfies AppConfig;
     const sub =
       getClaim(idClaims, 'sub') ??
-      getClaim(accessClaims, 'sub') ??
       'anonymous';
     const issuerCandidate =
       getClaim(idClaims, 'iss') ??
-      getClaim(accessClaims, 'iss') ??
       config.oidcIssuer ??
       (config.mockAuth ? 'urn:mock' : '');
     const issuer = issuerCandidate && issuerCandidate.length > 0
@@ -615,10 +622,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     const displayName =
       getClaim(idClaims, 'name') ??
       getClaim(idClaims, 'preferred_username') ??
-      getClaim(idClaims, 'email') ??
-      getClaim(accessClaims, 'name') ??
-      getClaim(accessClaims, 'preferred_username') ??
-      getClaim(accessClaims, 'email');
+      getClaim(idClaims, 'email');
 
     const authedUser: AuthenticatedUser = {
       sub,
@@ -661,7 +665,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!window.__APP_CONFIG) {
         window.__APP_CONFIG = config;
       }
-      const relativePath = stripBasePath(window.location.pathname);
+      const relativePath = relativeToBase(window.location.pathname);
       const redirectTarget = `${relativePath}${window.location.search ?? ''}${window.location.hash ?? ''}`;
       sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectTarget);
       if (config.staticMode && config.mockAuth) {
@@ -720,7 +724,7 @@ function useAuth() {
 }
 
 function App() {
-  const basename = BASE_PATH === '/' ? undefined : BASE_PATH;
+  const basename = routerBasename === '/' ? undefined : routerBasename;
   return (
     <BrowserRouter basename={basename}>
       <AuthProvider>
@@ -740,7 +744,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { status, user, login, logout } = useAuth();
   const location = useLocation();
   const navIsActive = useCallback((path: string) => {
-    const current = stripBasePath(location.pathname);
+    const current = relativeToBase(location.pathname);
     if (path === '/') {
       return current === '/';
     }
@@ -2462,19 +2466,6 @@ function decodeIdToken(idToken: string): Record<string, any> | null {
     console.error('Failed to decode ID token payload', error);
     return null;
   }
-}
-
-function decodeAccessToken(token: string): Record<string, unknown> | null {
-  try {
-    const json = decodeBase64Url(token);
-    const parsed = JSON.parse(json);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch (error) {
-    console.error('Failed to decode access token payload', error);
-  }
-  return null;
 }
 
 function decodeBase64Url(value: string): string {

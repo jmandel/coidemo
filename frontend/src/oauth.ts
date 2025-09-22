@@ -1,5 +1,3 @@
-import { getBasePath, withBasePath } from './basePath';
-
 export type AppConfig = {
   fhirBaseUrl: string;
   oidcIssuer: string | null;
@@ -7,7 +5,6 @@ export type AppConfig = {
   oidcRedirectUri: string | null;
   mockAuth: boolean;
   staticMode: boolean;
-  basePath?: string;
   questionnaire?: {
     url: string;
     version: string;
@@ -22,7 +19,6 @@ type RawAppConfig = {
   oidcRedirectUri?: string | null;
   mockAuth?: boolean;
   staticMode?: boolean;
-  basePath?: string | null;
   questionnaire?: {
     url: string;
     version: string;
@@ -47,7 +43,7 @@ type StoredPkce = {
   state: string;
 };
 
-const CONFIG_URL = withBasePath('config.json');
+const CONFIG_URL = './config.json';
 const TOKEN_STORAGE_KEY = 'fi.tokens.v1';
 const PKCE_STORAGE_KEY = 'fi.pkce.v1';
 const PROCESSED_CODE_KEY = 'fi.code.v1';
@@ -60,15 +56,13 @@ export async function getAppConfig(): Promise<AppConfig> {
   const response = await fetch(CONFIG_URL, { credentials: 'omit' });
   if (!response.ok) throw new Error('Unable to load app config');
   const raw = await response.json() as RawAppConfig;
-  const basePath = getBasePath();
   appConfig = {
-    fhirBaseUrl: raw.fhirBaseUrl ?? withBasePath('fhir'),
+    fhirBaseUrl: raw.fhirBaseUrl ?? new URL('./fhir', document.baseURI).pathname,
     oidcIssuer: raw.oidcIssuer ?? null,
     oidcClientId: raw.oidcClientId ?? null,
-    oidcRedirectUri: raw.oidcRedirectUri ?? `${window.location.origin}${basePath === '/' ? '/' : `${basePath}/`}`,
+    oidcRedirectUri: raw.oidcRedirectUri ?? new URL('./', document.baseURI).toString(),
     mockAuth: Boolean(raw.mockAuth),
     staticMode: Boolean(raw.staticMode),
-    basePath,
     questionnaire: raw.questionnaire ?? null,
     questionnaireResource: raw.questionnaireResource ?? null
   } satisfies AppConfig;
@@ -113,7 +107,7 @@ export async function startLogin(options: { mockClaims?: Record<string, unknown>
 
   const authorizeUrl = new URL(metadata.authorization_endpoint);
   const clientId = config.oidcClientId ?? 'mock-client';
-  const redirectUri = config.oidcRedirectUri ?? `${window.location.origin}${(config.basePath && config.basePath !== '/') ? `${config.basePath}/` : '/'}`;
+  const redirectUri = config.oidcRedirectUri ?? new URL('./', document.baseURI).toString();
   authorizeUrl.searchParams.set('client_id', clientId);
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
   authorizeUrl.searchParams.set('response_type', 'code');

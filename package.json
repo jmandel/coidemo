@@ -9,6 +9,7 @@
     "build:static": "bun run scripts/build-static.ts"
   },
   "dependencies": {
+    "bun-plugin-tailwind": "^0.0.15",
     "elysia": "^1.0.28",
     "jose": "^6.1.0",
     "react": "^18.2.0",

@@ -1,14 +1,37 @@
 import { existsSync } from 'node:fs';
-import { writeFile, rm, cp, mkdir } from 'node:fs/promises';
+import { writeFile, rm, cp, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { $ } from 'bun';
 import { canonicalQuestionnaire, FI_CANONICAL_URL, FI_VERSION } from '../src/questionnaire';
 
+function normalizeBasePath(value?: string | null): string {
+  if (!value) return '/';
+  let path = value.trim();
+  if (!path) return '/';
+  if (!path.startsWith('/')) path = `/${path}`;
+  path = path.replace(/\/+$/g, '');
+  return path === '' ? '/' : path;
+}
+
+const STATIC_BASE_PATH = normalizeBasePath(process.env.STATIC_BASE_PATH);
+const STATIC_BASE_HREF = STATIC_BASE_PATH === '/' ? '/' : `${STATIC_BASE_PATH}/`;
+
 async function runBuild() {
   const frontendDir = fileURLToPath(new URL('../frontend', import.meta.url));
   await $`bun install --silent`.cwd(frontendDir).env({ ...process.env });
   await $`bun run ./scripts/build.ts`.cwd(frontendDir).env({ ...process.env, NODE_ENV: 'production' });
+}
+
+async function updateBaseHref() {
+  const distDir = fileURLToPath(new URL('../frontend/dist', import.meta.url));
+  const indexPath = join(distDir, 'index.html');
+  if (!existsSync(indexPath)) {
+    throw new Error('Expected frontend/dist/index.html to exist after build.');
+  }
+  const html = await readFile(indexPath, 'utf8');
+  const updated = html.replace('<base href="/" />', `<base href="${STATIC_BASE_HREF}" />`);
+  await writeFile(indexPath, updated);
 }
 
 async function writeConfig() {
@@ -60,6 +83,7 @@ async function copyOutput() {
 }
 
 await runBuild();
+await updateBaseHref();
 await writeConfig();
 await copyOutput();
 
