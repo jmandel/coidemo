@@ -7,7 +7,7 @@ import React, {
   useState
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 import './styles.css';
@@ -722,7 +722,6 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/form" element={<FormPage />} />
           <Route path="/history" element={<HistoryPage />} />
-          <Route path="/history/:entryId" element={<HistoryPage />} />
           <Route path="/submitted" element={<SubmittedPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -849,7 +848,7 @@ function SubmittedPage() {
 function HistoryPage() {
   const { status: authStatus, user, login } = useAuth();
   const navigate = useNavigate();
-  const { entryId } = useParams<{ entryId?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const storeStatus = useFinancialInterestsStore((state) => state.status);
   const storeError = useFinancialInterestsStore((state) => state.error);
   const history = useFinancialInterestsStore((state) => state.history);
@@ -872,32 +871,18 @@ function HistoryPage() {
 
   useEffect(() => {
     if (orderedHistory.length === 0) return;
-    if (!entryId) {
-      const defaultKey = orderedHistory[0].key;
-      navigate(`/history/${encodeURIComponent(defaultKey)}`, { replace: true });
-    } else {
-      let decoded: string | null = null;
-      try {
-        decoded = decodeURIComponent(entryId);
-      } catch {
-        decoded = null;
-      }
-      if (!decoded || !history.some((entry) => entry.key === decoded)) {
-        const fallbackKey = orderedHistory[0].key;
-        navigate(`/history/${encodeURIComponent(fallbackKey)}`, { replace: true });
-      }
+    const currentKey = searchParams.get('entry');
+    if (!currentKey || !history.some((entry) => entry.key === currentKey)) {
+      const fallbackKey = orderedHistory[0].key;
+      setSearchParams({ entry: fallbackKey }, { replace: true });
     }
-  }, [entryId, orderedHistory, history, navigate]);
+  }, [orderedHistory, history, searchParams, setSearchParams]);
 
   const selectedEntry = useMemo(() => {
-    if (!entryId) return orderedHistory[0] ?? null;
-    try {
-      const decoded = decodeURIComponent(entryId);
-      return history.find((entry) => entry.key === decoded) ?? orderedHistory[0] ?? null;
-    } catch {
-      return orderedHistory[0] ?? null;
-    }
-  }, [entryId, history, orderedHistory]);
+    const key = searchParams.get('entry');
+    if (!key) return orderedHistory[0] ?? null;
+    return history.find((entry) => entry.key === key) ?? orderedHistory[0] ?? null;
+  }, [searchParams, history, orderedHistory]);
 
   if (authStatus !== 'authenticated' || !user) {
     return (
@@ -981,13 +966,13 @@ function HistoryPage() {
                   style={isActive ? { borderColor: '#1d4ed8', backgroundColor: '#eef2ff', boxShadow: 'inset 0 0 0 1px rgba(29,78,216,0.2)' } : undefined}
                 >
                   <div className="min-w-0" style={{ flex: '1 1 auto' }}>
-                    <Link to={href} className="font-medium text-slate-800" aria-current={isActive ? 'page' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <Link to={{ pathname: '/history', search: `entry=${encodeURIComponent(entry.key)}` }} className="font-medium text-slate-800" aria-current={isActive ? 'page' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                       <span>{label}</span>
                     </Link>
                     <div className="small">{summary}</div>
                   </div>
                   <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
-                    <Link className="secondary" to={href} aria-current={isActive ? 'page' : undefined}>View</Link>
+                    <Link className="secondary" to={{ pathname: '/history', search: `entry=${encodeURIComponent(entry.key)}` }} aria-current={isActive ? 'page' : undefined}>View</Link>
                     <button className="ghost" onClick={() => { void handleLoadIntoForm(entry.key); }}>Load into form</button>
                   </div>
                 </li>
