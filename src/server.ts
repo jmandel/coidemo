@@ -156,9 +156,6 @@ const server = Bun.serve({
     if (url.pathname === '/config.json') {
       return configJsonResponse();
     }
-    if (url.pathname === '/config.js') {
-      return configResponse();
-    }
     return app.handle(req);
   }
 });

@@ -52,5 +52,6 @@ The build writes a `config.json` alongside the compiled assets so the SPA boots 
 - All FHIR data lives in `./data/fhir.db`
 - CSV/static-site generation from earlier iterations has been removed
 - Type-check with `bunx tsc --noEmit`
+- Frontend assets are bundled with Bun; run `cd frontend && bun run ./scripts/build.ts -- --watch` during development or `bun run ./scripts/build.ts` for a one-off build.
 
 Extend the façade with additional resource types or search parameters as needed for your workflow.

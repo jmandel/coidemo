@@ -7,7 +7,8 @@ import { canonicalQuestionnaire, FI_CANONICAL_URL, FI_VERSION } from '../src/que
 
 async function runBuild() {
   const frontendDir = fileURLToPath(new URL('../frontend', import.meta.url));
-  await $`bun run build`.cwd(frontendDir).env({ ...process.env });
+  await $`bun install --silent`.cwd(frontendDir).env({ ...process.env });
+  await $`bun run ./scripts/build.ts`.cwd(frontendDir).env({ ...process.env, NODE_ENV: 'production' });
 }
 
 async function writeConfig() {
