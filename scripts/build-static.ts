@@ -17,6 +17,10 @@ function normalizeBasePath(value?: string | null): string {
 const STATIC_BASE_PATH = normalizeBasePath(process.env.STATIC_BASE_PATH);
 const STATIC_BASE_HREF = STATIC_BASE_PATH === '/' ? '/' : `${STATIC_BASE_PATH}/`;
 
+console.log('[build-static] STATIC_BASE_PATH env:', process.env.STATIC_BASE_PATH ?? '<undefined>');
+console.log('[build-static] Normalized STATIC_BASE_PATH:', STATIC_BASE_PATH);
+console.log('[build-static] Derived STATIC_BASE_HREF:', STATIC_BASE_HREF);
+
 async function runBuild() {
   const frontendDir = fileURLToPath(new URL('../frontend', import.meta.url));
   await $`bun install --silent`.cwd(frontendDir).env({ ...process.env });
@@ -30,7 +34,14 @@ async function updateBaseHref() {
     throw new Error('Expected frontend/dist/index.html to exist after build.');
   }
   const html = await readFile(indexPath, 'utf8');
+  const currentBaseMatch = html.match(/<base[^>]*href="([^"]*)"[^>]*>/i);
+  console.log('[build-static] Found base href in frontend/dist/index.html:', currentBaseMatch?.[1] ?? '<missing>');
   const updated = html.replace('<base href="/" />', `<base href="${STATIC_BASE_HREF}" />`);
+  if (updated === html) {
+    console.warn('[build-static] No base href replacement occurred; check template.');
+  } else {
+    console.log('[build-static] Updated base href in frontend/dist/index.html to:', STATIC_BASE_HREF);
+  }
   await writeFile(indexPath, updated);
 }
 
@@ -80,6 +91,10 @@ async function copyOutput() {
 
   // Provide SPA fallbacks for GitHub Pages
   await cp(join(targetDir, 'index.html'), join(targetDir, '404.html'));
+
+  const finalIndex = await readFile(join(targetDir, 'index.html'), 'utf8');
+  const finalBaseMatch = finalIndex.match(/<base[^>]*href="([^"]*)"[^>]*>/i);
+  console.log('[build-static] dist-static/index.html base href:', finalBaseMatch?.[1] ?? '<missing>');
 }
 
 await runBuild();
