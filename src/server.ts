@@ -2,7 +2,7 @@ import { Elysia } from 'elysia';
 import { existsSync, mkdirSync } from 'node:fs';
 import homepage from '../frontend/index.html';
 import { FHIRStore, type FHIRResource } from './db';
-import { canonicalQuestionnaire, COI_CANONICAL_URL, COI_VERSION } from './questionnaire';
+import { canonicalQuestionnaire, FI_CANONICAL_URL, FI_VERSION } from './questionnaire';
 import { verifyAuthorization, type AuthenticatedAccessToken } from './auth';
 import { registerMockOidc } from './mock_oidc';
 
@@ -10,6 +10,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const allowedResourceTypes = new Set(['Questionnaire', 'QuestionnaireResponse']);
 const APP_BASE_URL = process.env.APP_BASE_URL ?? `http://localhost:${PORT}`;
 const MOCK_MODE = process.env.MOCK_AUTH === 'true';
+const STATIC_MODE = process.env.STATIC_MODE === 'true';
 const MOCK_OIDC_BASE_PATH = '/mock-oidc';
 const MOCK_OIDC_ISSUER = `${APP_BASE_URL}${MOCK_OIDC_BASE_PATH}`;
 
@@ -162,7 +163,7 @@ const server = Bun.serve({
   }
 });
 
-console.log(`FHIR COI server running at http://localhost:${PORT}`);
+console.log(`FHIR financial interests server running at http://localhost:${PORT}`);
 
 async function safeJson(request: Request): Promise<unknown> {
   try {
@@ -200,8 +201,8 @@ function enforceQuestionnaireResponseInvariants(resource: FHIRResource, auth: Au
 
 function seedCanonicalQuestionnaire(store: FHIRStore) {
   const params = new URLSearchParams();
-  params.set('url', COI_CANONICAL_URL);
-  params.set('version', COI_VERSION);
+  params.set('url', FI_CANONICAL_URL);
+  params.set('version', FI_VERSION);
   const existing = store.search('Questionnaire', params);
   if (existing.total > 0) return;
   store.create(canonicalQuestionnaire);
@@ -246,9 +247,11 @@ function currentConfig() {
     oidcClientId: process.env.OIDC_CLIENT_ID ?? null,
     oidcRedirectUri: process.env.OIDC_REDIRECT_URI ?? `${APP_BASE_URL}/`,
     mockAuth: MOCK_MODE,
+    staticMode: STATIC_MODE,
     questionnaire: {
-      url: COI_CANONICAL_URL,
-      version: COI_VERSION
-    }
+      url: FI_CANONICAL_URL,
+      version: FI_VERSION
+    },
+    questionnaireResource: STATIC_MODE ? canonicalQuestionnaire : undefined
   };
 }

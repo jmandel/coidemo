@@ -4,10 +4,26 @@ export type AppConfig = {
   oidcClientId: string | null;
   oidcRedirectUri: string | null;
   mockAuth: boolean;
+  staticMode: boolean;
   questionnaire?: {
     url: string;
     version: string;
   } | null;
+  questionnaireResource?: unknown | null;
+};
+
+type RawAppConfig = {
+  fhirBaseUrl?: string;
+  oidcIssuer?: string | null;
+  oidcClientId?: string | null;
+  oidcRedirectUri?: string | null;
+  mockAuth?: boolean;
+  staticMode?: boolean;
+  questionnaire?: {
+    url: string;
+    version: string;
+  } | null;
+  questionnaireResource?: unknown | null;
 };
 
 export type OidcMetadata = {
@@ -28,9 +44,9 @@ type StoredPkce = {
 };
 
 const CONFIG_URL = '/config.json';
-const TOKEN_STORAGE_KEY = 'coi.tokens.v1';
-const PKCE_STORAGE_KEY = 'coi.pkce.v1';
-const PROCESSED_CODE_KEY = 'coi.code.v1';
+const TOKEN_STORAGE_KEY = 'fi.tokens.v1';
+const PKCE_STORAGE_KEY = 'fi.pkce.v1';
+const PROCESSED_CODE_KEY = 'fi.code.v1';
 
 let appConfig: AppConfig | null = window.__APP_CONFIG ?? null;
 let metadataCache: OidcMetadata | null = null;
@@ -39,7 +55,17 @@ export async function getAppConfig(): Promise<AppConfig> {
   if (appConfig) return appConfig;
   const response = await fetch(CONFIG_URL, { credentials: 'omit' });
   if (!response.ok) throw new Error('Unable to load app config');
-  appConfig = await response.json() as AppConfig;
+  const raw = await response.json() as RawAppConfig;
+  appConfig = {
+    fhirBaseUrl: raw.fhirBaseUrl ?? '/fhir',
+    oidcIssuer: raw.oidcIssuer ?? null,
+    oidcClientId: raw.oidcClientId ?? null,
+    oidcRedirectUri: raw.oidcRedirectUri ?? `${window.location.origin}/`,
+    mockAuth: Boolean(raw.mockAuth),
+    staticMode: Boolean(raw.staticMode),
+    questionnaire: raw.questionnaire ?? null,
+    questionnaireResource: raw.questionnaireResource ?? null
+  } satisfies AppConfig;
   return appConfig;
 }
 
@@ -66,6 +92,10 @@ export function getStoredTokens(): StoredTokens | null {
 export function clearStoredTokens() {
   sessionStorage.removeItem(TOKEN_STORAGE_KEY);
   sessionStorage.removeItem(PROCESSED_CODE_KEY);
+}
+
+export function setStoredTokens(tokens: StoredTokens) {
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(tokens));
 }
 
 export async function startLogin(options: { mockClaims?: Record<string, unknown> } = {}): Promise<void> {
@@ -121,7 +151,7 @@ export async function handleRedirect(): Promise<StoredTokens | null> {
 }
 
 function storeTokens(tokens: StoredTokens) {
-  sessionStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(tokens));
+  setStoredTokens(tokens);
 }
 
 async function exchangeAuthCode(meta: OidcMetadata, codeVerifier: string, code: string): Promise<StoredTokens> {

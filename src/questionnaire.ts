@@ -1,18 +1,18 @@
 import type { FHIRResource } from './db';
 
-export const COI_CANONICAL_URL = 'https://example.org/hl7-coi/Questionnaire/coi';
-export const COI_VERSION = '2025.09.1';
+export const FI_CANONICAL_URL = 'https://rfi.hl7.org/Questionnaire/annual-submission';
+export const FI_VERSION = '2025.10.0';
 
 export const canonicalQuestionnaire: FHIRResource = {
   resourceType: 'Questionnaire',
   status: 'active',
   experimental: false,
-  name: 'HL7COIDisclosure',
-  title: 'HL7 Conflict of Interest Disclosure',
-  url: COI_CANONICAL_URL,
-  version: COI_VERSION,
+  name: 'HL7FinancialInterestsRegister',
+  title: 'Register of Financial Interests',
+  url: FI_CANONICAL_URL,
+  version: FI_VERSION,
   subjectType: ['Practitioner'],
-  description: `Annual disclosure of roles, funding, ownership, and gifts in accordance with HL7 policies. This simplified form captures the relationships necessary to generate the public COI register.`,
+  description: `Annual registration of roles, funding, ownership, and gifts in alignment with HL7 financial interest policies. This streamlined form captures the relationships necessary to maintain the public Register of Financial Interests.`,
   item: [
     {
       linkId: 'participant',
@@ -35,12 +35,6 @@ export const canonicalQuestionnaire: FHIRResource = {
             { valueCoding: { code: 'Co-Chair', display: 'Co-Chair' } },
             { valueCoding: { code: 'Other', display: 'Other' } }
           ]
-        },
-        {
-          linkId: 'participant.consentPublic',
-          text: 'I consent to public posting of my name and disclosures',
-          type: 'boolean',
-          required: true
         }
       ]
     },
@@ -83,16 +77,6 @@ export const canonicalQuestionnaire: FHIRResource = {
           linkId: 'roles.paid',
           text: 'This role is paid',
           type: 'boolean'
-        },
-        {
-          linkId: 'roles.aboveThreshold',
-          text: 'Compensation meets HL7 disclosure threshold (≥ $10k)',
-          type: 'choice',
-          answerOption: [
-            { valueCoding: { code: 'true', display: 'Yes' } },
-            { valueCoding: { code: 'false', display: 'No' } },
-            { valueCoding: { code: 'unknown', display: 'Not sure' } }
-          ]
         }
       ]
     },
@@ -200,7 +184,7 @@ export const canonicalQuestionnaire: FHIRResource = {
       item: [
         {
           linkId: 'certification.statement',
-          text: 'I certify I have disclosed all interests per HL7 thresholds and agree to public posting (no dollar amounts).',
+          text: 'I certify these financial interests meet HL7 thresholds and consent to public posting.',
           type: 'boolean',
           required: true
         }

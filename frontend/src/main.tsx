@@ -7,7 +7,7 @@ import React, {
   useState
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 import './styles.css';
@@ -17,6 +17,7 @@ import {
   getAppConfig,
   getStoredTokens,
   clearStoredTokens,
+  setStoredTokens,
   startLogin as oauthStartLogin,
   handleRedirect
 } from './oauth';
@@ -88,58 +89,56 @@ type EntityType = 'for_profit' | 'nonprofit' | 'government' | 'university' | 'pu
 type ParticipantInfo = {
   name: string;
   hl7Roles: string[];
-  consentPublic: boolean;
 };
 
-type RoleDisclosure = {
+type RoleInterest = {
   entityName: string;
   entityType: EntityType;
   role: string;
   paid: boolean;
   primaryEmployer: boolean;
-  aboveThreshold: boolean | null;
 };
 
-type FinancialDisclosure = {
+type FundingInterest = {
   fundingSource: string;
   entityType: EntityType;
   passThrough: boolean;
   intermediary: string;
 };
 
-type OwnershipDisclosure = {
+type OwnershipInterest = {
   entityName: string;
   entityType: EntityType;
   tier: '1-5%' | '>5%';
 };
 
-type GiftDisclosure = {
+type GiftInterest = {
   sponsor: string;
   entityType: EntityType;
 };
 
-type DisclosureDocument = {
+type FinancialInterestsDocument = {
   recordYear: number;
   participant: ParticipantInfo;
-  roles: RoleDisclosure[];
-  financial: FinancialDisclosure[];
-  ownerships: OwnershipDisclosure[];
-  gifts: GiftDisclosure[];
+  roles: RoleInterest[];
+  financial: FundingInterest[];
+  ownerships: OwnershipInterest[];
+  gifts: GiftInterest[];
   certificationChecked: boolean;
 };
 
-type DocumentUpdater = (current: DisclosureDocument) => DisclosureDocument;
+type DocumentUpdater = (current: FinancialInterestsDocument) => FinancialInterestsDocument;
 
 type CompletedHistoryEntry = {
   key: string;
   response: QuestionnaireResponse;
-  document: DisclosureDocument;
+  document: FinancialInterestsDocument;
 };
 
 type ExistingResponseLoad = {
-  document: DisclosureDocument;
+  document: FinancialInterestsDocument;
   responseId: string | null;
-  latestSubmitted?: DisclosureDocument;
+  latestSubmitted?: FinancialInterestsDocument;
   completedHistory: CompletedHistoryEntry[];
 };
 
@@ -168,6 +167,37 @@ const AuthContext = createContext<AuthContextValue>({
   logout: () => undefined
 });
 
+type SubmissionBackend = {
+  fetchQuestionnaire(user: AuthenticatedUser): Promise<Questionnaire>;
+  loadExisting(user: AuthenticatedUser, questionnaire: Questionnaire): Promise<ExistingResponseLoad>;
+  saveDraft(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse>;
+  submit(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse>;
+};
+
+let submissionBackendPromise: Promise<SubmissionBackend> | null = null;
+
+async function getSubmissionBackend(): Promise<SubmissionBackend> {
+  if (submissionBackendPromise) return submissionBackendPromise;
+  submissionBackendPromise = (async () => {
+    const config = await getAppConfig();
+    if (config.staticMode) {
+      return new StaticSubmissionBackend();
+    }
+    return new FhirSubmissionBackend();
+  })();
+  return submissionBackendPromise;
+}
+
 const wizardSteps = [
   { id: 0, title: 'Intro' },
   { id: 1, title: 'Roles' },
@@ -182,6 +212,7 @@ const fieldInputClass = 'w-full rounded-md border border-slate-300 px-3 py-2 tex
 const selectInputClass = `${fieldInputClass} bg-white`;
 const checkboxInputClass = 'h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-200 focus:outline-none';
 const sectionCardGap = 24;
+const POST_LOGIN_REDIRECT_KEY = 'fi.postLoginRedirect';
 
 function formatDateTime(value?: string | null) {
   if (!value) return '';
@@ -190,7 +221,7 @@ function formatDateTime(value?: string | null) {
   return date.toLocaleString();
 }
 
-function summarizeDocumentCounts(doc: DisclosureDocument) {
+function summarizeDocumentCounts(doc: FinancialInterestsDocument) {
   return {
     roles: doc.roles.length,
     financial: doc.financial.length,
@@ -214,15 +245,15 @@ type AutoSaveState = {
   pending: boolean;
 };
 
-type DisclosureStore = {
+type FinancialInterestsStore = {
   user: AuthenticatedUser | null;
   status: 'idle' | 'loading' | 'ready' | 'submitting' | 'error';
   error: string | null;
   questionnaire: Questionnaire | null;
-  document: DisclosureDocument;
+  document: FinancialInterestsDocument;
   responseId: string | null;
-  latestSubmitted: DisclosureDocument | null;
-  lastSubmittedDocument: DisclosureDocument | null;
+  latestSubmitted: FinancialInterestsDocument | null;
+  lastSubmittedDocument: FinancialInterestsDocument | null;
   history: CompletedHistoryEntry[];
   step: number;
   saveMessage: string;
@@ -234,13 +265,13 @@ type DisclosureStore = {
   setUser: (user: AuthenticatedUser | null) => void;
   initialize: () => Promise<void>;
   updateDocument: (updater: DocumentUpdater, opts?: { queueAutoSave?: boolean }) => void;
-  setDocument: (next: DisclosureDocument, opts?: { queueAutoSave?: boolean }) => void;
+  setDocument: (next: FinancialInterestsDocument, opts?: { queueAutoSave?: boolean }) => void;
   setStep: (step: number) => void;
   resetDocument: (opts?: { preserveHistory?: boolean }) => void;
   loadSample: () => Promise<void>;
   loadFromHistory: (responseId: string) => Promise<void>;
   loadLatestSubmission: () => Promise<void>;
-  saveDraft: (opts?: { silent?: boolean; document?: DisclosureDocument }) => Promise<void>;
+  saveDraft: (opts?: { silent?: boolean; document?: FinancialInterestsDocument }) => Promise<void>;
   submit: () => Promise<'success' | 'error'>;
   refreshHistory: () => Promise<void>;
   cancelAutoSave: () => void;
@@ -248,7 +279,7 @@ type DisclosureStore = {
   setError: (message: string | null) => void;
 };
 
-const disclosureStore = createStore<DisclosureStore>((set, get) => {
+const financialInterestsStore = createStore<FinancialInterestsStore>((set, get) => {
   const queueAutoSave = () => {
     const existing = get().autoSave;
     if (existing.handle) {
@@ -276,7 +307,7 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
     }
   };
 
-  const setDocumentInternal = (next: DisclosureDocument, queue?: boolean) => {
+  const setDocumentInternal = (next: FinancialInterestsDocument, queue?: boolean) => {
     set({ document: cloneDocument(next) });
     if (queue !== false) {
       queueAutoSave();
@@ -366,15 +397,21 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
       if (!user) return;
       set({ status: 'loading', error: null });
       try {
-        const questionnaire = await fetchQuestionnaire(user.accessToken);
-        const existing = await fetchExistingResponses(user, questionnaire);
+        const backend = await getSubmissionBackend();
+        const questionnaire = await backend.fetchQuestionnaire(user);
+        const existing = await backend.loadExisting(user, questionnaire);
         const baseDoc = withParticipantName(existing.document, user);
+        const latestSubmitted = existing.latestSubmitted ? withParticipantName(existing.latestSubmitted, user) : null;
+        const history = existing.completedHistory.map((entry) => ({
+          ...entry,
+          document: withParticipantName(entry.document, user)
+        }));
         set({
           questionnaire,
           document: baseDoc,
           responseId: existing.responseId,
-          latestSubmitted: existing.latestSubmitted ?? null,
-          history: existing.completedHistory,
+          latestSubmitted: latestSubmitted ?? null,
+          history,
           step: 0,
           status: 'ready',
           saveMessage: '',
@@ -408,13 +445,13 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
     },
     loadSample: async () => {
       const user = get().user;
-      const sample = sampleDocument(user?.name ?? user?.sub ?? 'Sample Discloser');
+      const sample = sampleDocument(user?.name ?? user?.sub ?? 'Sample Filer');
       const doc = withParticipantName(sample, user);
       resetAutoSaveState();
       set({
         document: doc,
         step: 0,
-        saveMessage: 'Loaded sample disclosure.',
+        saveMessage: 'Loaded sample filing.',
         submitMessage: ''
       });
       await get().saveDraft({ silent: true, document: doc });
@@ -451,15 +488,8 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
         set({ saveMessage: 'Saving…' });
       }
       try {
-        const payload = await documentToQuestionnaireResponse(questionnaire, payloadDocument, 'in-progress');
-        payload.subject = {
-          identifier: {
-            system: user.subjectSystem,
-            value: user.sub
-          },
-          display: deriveDisplayName(user)
-        };
-        const saved = await upsertQuestionnaireResponse(user.accessToken, payload, get().responseId ?? undefined);
+        const backend = await getSubmissionBackend();
+        const saved = await backend.saveDraft(user, questionnaire, payloadDocument, get().responseId ?? null);
         if (!silent) {
           set({ saveMessage: `Draft saved at ${new Date().toLocaleTimeString()}` });
         }
@@ -481,18 +511,11 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
       set({ status: 'submitting', submitMessage: 'Submitting…' });
       try {
         const submissionSnapshot = cloneDocument(document);
-        const payload = await documentToQuestionnaireResponse(questionnaire, document, 'completed');
-        payload.subject = {
-          identifier: {
-            system: user.subjectSystem,
-            value: user.sub
-          },
-          display: deriveDisplayName(user)
-        };
-        const saved = await upsertQuestionnaireResponse(user.accessToken, payload, get().responseId ?? undefined);
+        const backend = await getSubmissionBackend();
+        const saved = await backend.submit(user, questionnaire, document, get().responseId ?? null);
         set({
           responseId: saved.id ?? get().responseId,
-          submitMessage: 'Disclosure submitted successfully.',
+          submitMessage: 'Filing submitted successfully.',
           lastSubmittedDocument: submissionSnapshot
         });
         await get().refreshHistory();
@@ -500,7 +523,7 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
         return 'success';
       } catch (error) {
         console.error(error);
-        set({ submitMessage: 'Unable to submit disclosure.', status: 'ready' });
+        set({ submitMessage: 'Unable to submit filing.', status: 'ready' });
         return 'error';
       }
     },
@@ -508,13 +531,19 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
       const { user, questionnaire } = get();
       if (!user || !questionnaire) return;
       try {
-        const refreshed = await fetchExistingResponses(user, questionnaire);
+        const backend = await getSubmissionBackend();
+        const refreshed = await backend.loadExisting(user, questionnaire);
         const baseDoc = withParticipantName(refreshed.document, user);
+        const latestSubmitted = refreshed.latestSubmitted ? withParticipantName(refreshed.latestSubmitted, user) : null;
+        const history = refreshed.completedHistory.map((entry) => ({
+          ...entry,
+          document: withParticipantName(entry.document, user)
+        }));
         set({
           document: baseDoc,
           responseId: refreshed.responseId,
-          latestSubmitted: refreshed.latestSubmitted ?? null,
-          history: refreshed.completedHistory
+          latestSubmitted: latestSubmitted ?? null,
+          history
         });
       } catch (error) {
         console.error('Failed to refresh history', error);
@@ -528,11 +557,19 @@ const disclosureStore = createStore<DisclosureStore>((set, get) => {
   };
 });
 
-const useDisclosureStore = <T,>(selector: (state: DisclosureStore) => T) => useStore(disclosureStore, selector);
+const useFinancialInterestsStore = <T,>(selector: (state: FinancialInterestsStore) => T) => useStore(financialInterestsStore, selector);
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading');
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const navigate = useNavigate();
+
+  const performPostLoginRedirect = useCallback(() => {
+    const target = sessionStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+    if (!target) return;
+    sessionStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+    navigate(target, { replace: true });
+  }, [navigate]);
 
   const establishAuthFromTokens = useCallback((tokens: StoredTokens | null) => {
     if (!tokens) {
@@ -555,7 +592,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       oidcClientId: null,
       oidcRedirectUri: window.location.origin,
       mockAuth: true,
-      questionnaire: null
+      staticMode: false,
+      questionnaire: null,
+      questionnaireResource: null
     } satisfies AppConfig;
     const sub =
       getClaim(idClaims, 'sub') ??
@@ -599,22 +638,43 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         const tokens = await handleRedirect();
         if (tokens) {
           establishAuthFromTokens(tokens);
+          performPostLoginRedirect();
           return;
         }
         establishAuthFromTokens(getStoredTokens());
+        performPostLoginRedirect();
       } catch (error) {
         console.error('Authentication error', error);
         clearStoredTokens();
         setStatus('unauthenticated');
       }
     })();
-  }, [establishAuthFromTokens]);
+  }, [establishAuthFromTokens, performPostLoginRedirect]);
 
   const login = useCallback(async () => {
     try {
       const config = await getAppConfig();
       if (!window.__APP_CONFIG) {
         window.__APP_CONFIG = config;
+      }
+      const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, currentLocation);
+      if (config.staticMode && config.mockAuth) {
+        const defaults = defaultMockClaims();
+        const email = window.prompt('Mock email address', defaults.email) ?? '';
+        if (!email) {
+          setStatus('unauthenticated');
+          return;
+        }
+        const name = window.prompt('Display name', defaults.name ?? email) ?? email;
+        const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
+        const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
+        const accessToken = encodeMockClaims(claims);
+        const tokens: StoredTokens = { accessToken };
+        setStoredTokens(tokens);
+        establishAuthFromTokens(tokens);
+        performPostLoginRedirect();
+        return;
       }
       if (config.mockAuth) {
         const defaults = defaultMockClaims();
@@ -635,7 +695,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       clearStoredTokens();
       setStatus('unauthenticated');
     }
-  }, [setStatus]);
+  }, [setStatus, establishAuthFromTokens, performPostLoginRedirect]);
 
   const logout = useCallback(() => {
     clearStoredTokens();
@@ -656,29 +716,38 @@ function useAuth() {
 
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
+    <BrowserRouter>
+      <AuthProvider>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/form" element={<FormPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/history/:entryId" element={<HistoryPage />} />
           <Route path="/submitted" element={<SubmittedPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
   const { status, user, login, logout } = useAuth();
   const location = useLocation();
+  const navIsActive = useCallback((path: string) => {
+    if (path === '/') {
+      return location.pathname === '/';
+    }
+    return location.pathname === path || location.pathname.startsWith(`${path}/`);
+  }, [location.pathname]);
   return (
     <div>
       <header>
         <div className="container" style={{ paddingTop: 16, paddingBottom: 16 }}>
-          <nav>
-            <Link to="/">Home</Link>
-            <Link to="/form">Disclosure Form</Link>
+          <nav style={{ display: 'flex', gap: 16 }}>
+            <NavLink to="/" label="Home" active={navIsActive('/')} />
+            <NavLink to="/form" label="Financial Interests Form" active={navIsActive('/form') || navIsActive('/submitted')} />
+            <NavLink to="/history" label="My History" active={navIsActive('/history')} />
           </nav>
           <div className="small">
             {status === 'authenticated' && user ? (
@@ -701,17 +770,36 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+function NavLink({ to, label, active }: { to: string; label: string; active: boolean }) {
+  const style = active
+    ? {
+        color: '#1d4ed8',
+        fontWeight: 600,
+        borderBottom: '2px solid #1d4ed8',
+        paddingBottom: 2
+      }
+    : {
+        color: '#1f2937',
+        fontWeight: 500
+      };
+  return (
+    <Link to={to} aria-current={active ? 'page' : undefined} style={style}>
+      {label}
+    </Link>
+  );
+}
+
 function Home() {
   const { status, user, login } = useAuth();
   return (
     <Layout>
       <div className="card">
-        <h1>HL7 COI Disclosure Portal</h1>
+        <h1>HL7 Register of Financial Interests</h1>
         <p>
-          Complete your annual disclosure. Responses are stored as FHIR QuestionnaireResponses and can be submitted once ready.
+          Complete your annual financial interests filing. Responses are stored as FHIR QuestionnaireResponses and can be submitted once ready.
         </p>
         {status === 'authenticated' && user ? (
-          <p className="small">Welcome back, {user.name ?? user.sub}. Use the Disclosure Form tab to continue.</p>
+          <p className="small">Welcome back, {user.name ?? user.sub}. Use the Financial Interests Form tab to continue.</p>
         ) : (
           <div>
             <p className="small">Sign in with your HL7 account to get started.</p>
@@ -735,24 +823,178 @@ function NotFound() {
 }
 
 function SubmittedPage() {
-  const lastSubmitted = useDisclosureStore((state) => state.lastSubmittedDocument);
+  const lastSubmitted = useFinancialInterestsStore((state) => state.lastSubmittedDocument);
   const summary = useMemo(() => lastSubmitted ? formatSummaryCounts(summarizeDocumentCounts(lastSubmitted)) : null, [lastSubmitted]);
   return (
     <Layout>
       <div className="card">
         <h1>All set!</h1>
-        <p className="small">Your disclosure has been submitted successfully.</p>
+        <p className="small">Your financial interests filing has been submitted successfully.</p>
         {lastSubmitted ? (
           <>
             <div className="small" style={{ marginTop: 12 }}>{summary}</div>
             <SummaryView document={lastSubmitted} />
           </>
         ) : (
-          <p className="small" style={{ marginTop: 12 }}>There is no submitted disclosure to display. Return to the form to submit your information.</p>
+          <p className="small" style={{ marginTop: 12 }}>There is no submitted filing to display. Return to the form to submit your information.</p>
         )}
         <div style={{ marginTop: 20 }}>
-          <Link className="primary" to="/form">Return to disclosure form</Link>
+          <Link className="primary" to="/form">Return to financial interests form</Link>
         </div>
+      </div>
+    </Layout>
+  );
+}
+
+function HistoryPage() {
+  const { status: authStatus, user, login } = useAuth();
+  const navigate = useNavigate();
+  const { entryId } = useParams<{ entryId?: string }>();
+  const storeStatus = useFinancialInterestsStore((state) => state.status);
+  const storeError = useFinancialInterestsStore((state) => state.error);
+  const history = useFinancialInterestsStore((state) => state.history);
+  const latestSubmitted = useFinancialInterestsStore((state) => state.latestSubmitted);
+  const initialize = useFinancialInterestsStore((state) => state.initialize);
+  const setStoreUser = useFinancialInterestsStore((state) => state.setUser);
+  const loadFromHistory = useFinancialInterestsStore((state) => state.loadFromHistory);
+
+  useEffect(() => {
+    setStoreUser(user ?? null);
+  }, [user, setStoreUser]);
+
+  useEffect(() => {
+    if (authStatus === 'authenticated' && user && storeStatus === 'idle') {
+      initialize();
+    }
+  }, [authStatus, user, storeStatus, initialize]);
+
+  const orderedHistory = useMemo(() => [...history].reverse(), [history]);
+
+  useEffect(() => {
+    if (orderedHistory.length === 0) return;
+    if (!entryId) {
+      const defaultKey = orderedHistory[0].key;
+      navigate(`/history/${encodeURIComponent(defaultKey)}`, { replace: true });
+    } else {
+      let decoded: string | null = null;
+      try {
+        decoded = decodeURIComponent(entryId);
+      } catch {
+        decoded = null;
+      }
+      if (!decoded || !history.some((entry) => entry.key === decoded)) {
+        const fallbackKey = orderedHistory[0].key;
+        navigate(`/history/${encodeURIComponent(fallbackKey)}`, { replace: true });
+      }
+    }
+  }, [entryId, orderedHistory, history, navigate]);
+
+  const selectedEntry = useMemo(() => {
+    if (!entryId) return orderedHistory[0] ?? null;
+    try {
+      const decoded = decodeURIComponent(entryId);
+      return history.find((entry) => entry.key === decoded) ?? orderedHistory[0] ?? null;
+    } catch {
+      return orderedHistory[0] ?? null;
+    }
+  }, [entryId, history, orderedHistory]);
+
+  if (authStatus !== 'authenticated' || !user) {
+    return (
+      <Layout>
+        <div className="card">
+          <h1>My History</h1>
+          <p className="small">You must be logged in to view your filing history.</p>
+          <button className="primary" onClick={login}>Login</button>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (storeStatus === 'idle' || storeStatus === 'loading') {
+    return (
+      <Layout>
+        <div className="card">Loading…</div>
+      </Layout>
+    );
+  }
+
+  if (storeStatus === 'error' && storeError) {
+    return (
+      <Layout>
+        <div className="card">
+          <h1>My History</h1>
+          <p className="small">{storeError}</p>
+        </div>
+      </Layout>
+    );
+  }
+
+  const handleLoadIntoForm = async (key: string) => {
+    try {
+      await loadFromHistory(key);
+      navigate('/form');
+    } catch (error) {
+      console.error('Failed to load submission', error);
+    }
+  };
+
+  const activeDoc = selectedEntry?.document ?? latestSubmitted ?? null;
+  const activeAuthored = selectedEntry?.response.authored ?? selectedEntry?.response.meta?.lastUpdated ?? null;
+
+  return (
+    <Layout>
+      <div className="card" style={{ marginBottom: 24 }}>
+        <h1>My History</h1>
+        <p className="small" style={{ marginTop: 8 }}>Review past filings and load one as a starting point for the current year.</p>
+        {activeDoc && selectedEntry ? (
+          <div style={{ marginTop: 16 }}>
+            <div className="small" style={{ marginBottom: 12 }}>
+              Filed on {activeAuthored ? formatDateTime(activeAuthored) : 'Unknown date'} • {formatSummaryCounts(summarizeDocumentCounts(activeDoc))}
+            </div>
+            <SummaryView document={activeDoc} />
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="primary" onClick={() => { void handleLoadIntoForm(selectedEntry.key); }}>Load into form</button>
+            </div>
+          </div>
+        ) : (
+          <p className="small" style={{ marginTop: 12 }}>You do not have any submitted filings yet.</p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="text-lg font-semibold text-slate-800">All submissions</h2>
+        {orderedHistory.length === 0 ? (
+          <p className="small" style={{ marginTop: 8 }}>Submissions you complete will appear here.</p>
+        ) : (
+          <ul className="flex flex-col gap-3" style={{ marginTop: 16 }}>
+            {orderedHistory.map((entry) => {
+              const authored = entry.response.authored ?? entry.response.meta?.lastUpdated ?? '';
+              const label = authored ? formatDateTime(authored) : 'Unknown submission';
+              const summary = formatSummaryCounts(summarizeDocumentCounts(entry.document));
+              const href = `/history/${encodeURIComponent(entry.key)}`;
+              const isActive = selectedEntry?.key === entry.key;
+              return (
+                <li
+                  key={entry.key}
+                  className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3"
+                  style={isActive ? { borderColor: '#1d4ed8', backgroundColor: '#eef2ff', boxShadow: 'inset 0 0 0 1px rgba(29,78,216,0.2)' } : undefined}
+                >
+                  <div className="min-w-0" style={{ flex: '1 1 auto' }}>
+                    <Link to={href} className="font-medium text-slate-800" aria-current={isActive ? 'page' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span>{label}</span>
+                    </Link>
+                    <div className="small">{summary}</div>
+                  </div>
+                  <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
+                    <Link className="secondary" to={href} aria-current={isActive ? 'page' : undefined}>View</Link>
+                    <button className="ghost" onClick={() => { void handleLoadIntoForm(entry.key); }}>Load into form</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </Layout>
   );
@@ -761,24 +1003,24 @@ function SubmittedPage() {
 function FormPage() {
   const { status: authStatus, user, login } = useAuth();
   const navigate = useNavigate();
-  const storeStatus = useDisclosureStore((state) => state.status);
-  const storeError = useDisclosureStore((state) => state.error);
-  const document = useDisclosureStore((state) => state.document);
-  const questionnaire = useDisclosureStore((state) => state.questionnaire);
-  const step = useDisclosureStore((state) => state.step);
-  const setStep = useDisclosureStore((state) => state.setStep);
-  const updateDocument = useDisclosureStore((state) => state.updateDocument);
-  const loadSample = useDisclosureStore((state) => state.loadSample);
-  const loadLatestSubmission = useDisclosureStore((state) => state.loadLatestSubmission);
-  const loadFromHistory = useDisclosureStore((state) => state.loadFromHistory);
-  const submit = useDisclosureStore((state) => state.submit);
-  const saveMessage = useDisclosureStore((state) => state.saveMessage);
-  const submitMessage = useDisclosureStore((state) => state.submitMessage);
-  const history = useDisclosureStore((state) => state.history);
-  const canAdvanceIntro = useDisclosureStore((state) => state.canAdvanceIntro());
-  const summaryText = useDisclosureStore((state) => state.summaryText());
-  const initialize = useDisclosureStore((state) => state.initialize);
-  const setStoreUser = useDisclosureStore((state) => state.setUser);
+  const storeStatus = useFinancialInterestsStore((state) => state.status);
+  const storeError = useFinancialInterestsStore((state) => state.error);
+  const document = useFinancialInterestsStore((state) => state.document);
+  const questionnaire = useFinancialInterestsStore((state) => state.questionnaire);
+  const step = useFinancialInterestsStore((state) => state.step);
+  const setStep = useFinancialInterestsStore((state) => state.setStep);
+  const updateDocument = useFinancialInterestsStore((state) => state.updateDocument);
+  const loadSample = useFinancialInterestsStore((state) => state.loadSample);
+  const loadLatestSubmission = useFinancialInterestsStore((state) => state.loadLatestSubmission);
+  const loadFromHistory = useFinancialInterestsStore((state) => state.loadFromHistory);
+  const submit = useFinancialInterestsStore((state) => state.submit);
+  const saveMessage = useFinancialInterestsStore((state) => state.saveMessage);
+  const submitMessage = useFinancialInterestsStore((state) => state.submitMessage);
+  const history = useFinancialInterestsStore((state) => state.history);
+  const canAdvanceIntro = useFinancialInterestsStore((state) => state.canAdvanceIntro());
+  const summaryText = useFinancialInterestsStore((state) => state.summaryText());
+  const initialize = useFinancialInterestsStore((state) => state.initialize);
+  const setStoreUser = useFinancialInterestsStore((state) => state.setUser);
 
   useEffect(() => {
     setStoreUser(user ?? null);
@@ -799,8 +1041,8 @@ function FormPage() {
     return (
       <Layout>
         <div className="card">
-          <h1>Disclosure Form</h1>
-          <p className="small">You must be logged in to edit your disclosure.</p>
+          <h1>Financial Interests Form</h1>
+          <p className="small">You must be logged in to edit your filing.</p>
           <button className="primary" onClick={login}>Login</button>
         </div>
       </Layout>
@@ -850,7 +1092,7 @@ function FormPage() {
       <div className="card">
         <div className="stepHeader" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
           <div>
-            <h1>Disclosure Form</h1>
+            <h1>Financial Interests Form</h1>
             <p className="small">
               Step {step + 1} of {steps.length}
               {step === steps.length - 1 ? ` • ${summaryText}` : ''}
@@ -896,7 +1138,7 @@ function FormPage() {
             ) : (
               <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h3 className="text-base font-semibold text-slate-800">Sample submission</h3>
-                <p className="small" style={{ marginTop: 8 }}>Need an example to get started? Load a sample disclosure and edit from there.</p>
+                <p className="small" style={{ marginTop: 8 }}>Need an example to get started? Load a sample filing and edit from there.</p>
                 <button className="secondary" style={{ marginTop: 16 }} onClick={() => { void loadSample(); }}>Load sample submission</button>
               </div>
             )}
@@ -952,7 +1194,7 @@ function FormPage() {
                       certificationChecked: e.target.checked
                     }))}
                   />
-                  <span>I certify I have disclosed all interests per HL7 thresholds and agree to public posting.</span>
+                  <span>I certify these financial interests meet HL7 thresholds and consent to public posting.</span>
                 </label>
                 <button
                   className="primary"
@@ -964,7 +1206,7 @@ function FormPage() {
                     }
                   }}
               >
-                Submit disclosure
+                Submit filing
               </button>
             </div>
             </div>
@@ -979,8 +1221,8 @@ function FormPage() {
 }
 
 type SectionProps = {
-  document: DisclosureDocument;
-  updateDocument: (fn: (current: DisclosureDocument) => DisclosureDocument) => void;
+  document: FinancialInterestsDocument;
+  updateDocument: (fn: (current: FinancialInterestsDocument) => FinancialInterestsDocument) => void;
 };
 
 function ParticipantSection({ document, updateDocument }: SectionProps) {
@@ -1040,8 +1282,7 @@ function RolesSection({ document, updateDocument }: SectionProps) {
           entityType: 'for_profit',
           role: '',
           paid: false,
-          primaryEmployer: false,
-          aboveThreshold: null
+          primaryEmployer: false
         }
       ]
     }));
@@ -1059,7 +1300,7 @@ function RolesSection({ document, updateDocument }: SectionProps) {
       <div className="sectionHeader">
         <div>
           <h2>Professional roles</h2>
-          <p className="small">Include primary employer and governance/advisory roles meeting the disclosure threshold.</p>
+          <p className="small">Include primary employer and governance/advisory roles meeting the financial interest threshold.</p>
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -1142,25 +1383,6 @@ function RolesSection({ document, updateDocument }: SectionProps) {
                 />
                 Paid role
               </label>
-              <div className="space-y-2">
-                <span className={fieldLabelClass}>Compensation meets threshold?</span>
-                <select
-                  value={role.aboveThreshold === null ? 'unknown' : role.aboveThreshold ? 'true' : 'false'}
-                  onChange={(e) => updateDocument((doc) => ({
-                    ...doc,
-                    roles: doc.roles.map((r, i) => (
-                      i === idx
-                        ? { ...r, aboveThreshold: e.target.value === 'unknown' ? null : e.target.value === 'true' }
-                        : r
-                    ))
-                  }))}
-                  className={selectInputClass}
-                >
-                  <option value="unknown">Not sure / not applicable</option>
-                  <option value="true">Yes</option>
-                  <option value="false">No</option>
-                </select>
-              </div>
             </div>
           </div>
         ))}
@@ -1194,7 +1416,7 @@ function FinancialSection({ document, updateDocument }: SectionProps) {
       <div className="sectionHeader">
         <div>
           <h2>Funding sources</h2>
-          <p className="small">Report sources meeting the HL7 disclosure threshold in the prior 12 months.</p>
+          <p className="small">Report sources meeting the HL7 financial interest threshold in the prior 12 months.</p>
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -1353,7 +1575,7 @@ function OwnershipSection({ document, updateDocument }: SectionProps) {
                   value={entry.tier}
                   onChange={(e) => updateDocument((doc) => ({
                     ...doc,
-                    ownerships: doc.ownerships.map((o, i) => (i === idx ? { ...o, tier: e.target.value as OwnershipDisclosure['tier'] } : o))
+                    ownerships: doc.ownerships.map((o, i) => (i === idx ? { ...o, tier: e.target.value as OwnershipInterest['tier'] } : o))
                   }))}
                   className={selectInputClass}
                 >
@@ -1481,7 +1703,7 @@ function HistoryCard({ history, onLoad }: { history: CompletedHistoryEntry[]; on
   );
 }
 
-function SummaryView({ document }: { document: DisclosureDocument }) {
+function SummaryView({ document }: { document: FinancialInterestsDocument }) {
   return (
     <div className="entryGroups">
       <div className="entryGroup">
@@ -1528,10 +1750,10 @@ function SummaryView({ document }: { document: DisclosureDocument }) {
 
 // --- Helpers ---
 
-function initialDocument(): DisclosureDocument {
+function initialDocument(): FinancialInterestsDocument {
   return {
     recordYear: new Date().getFullYear(),
-    participant: { name: '', hl7Roles: [], consentPublic: true },
+    participant: { name: '', hl7Roles: [] },
     roles: [],
     financial: [],
     ownerships: [],
@@ -1540,13 +1762,12 @@ function initialDocument(): DisclosureDocument {
   };
 }
 
-function sampleDocument(name: string): DisclosureDocument {
+function sampleDocument(name: string): FinancialInterestsDocument {
   return {
     recordYear: new Date().getFullYear(),
     participant: {
       name,
-      hl7Roles: ['Board', 'TSC'],
-      consentPublic: true
+      hl7Roles: ['Board', 'TSC']
     },
     roles: [
       {
@@ -1554,16 +1775,14 @@ function sampleDocument(name: string): DisclosureDocument {
         entityType: 'for_profit',
         role: 'Chief Standards Strategist',
         paid: true,
-        primaryEmployer: true,
-        aboveThreshold: true
+        primaryEmployer: true
       },
       {
         entityName: 'Nimbus Interop Cooperative',
         entityType: 'nonprofit',
         role: 'Program Advisor',
         paid: false,
-        primaryEmployer: false,
-        aboveThreshold: null
+        primaryEmployer: false
       }
     ],
     financial: [
@@ -1595,7 +1814,7 @@ function deriveDisplayName(user: AuthenticatedUser | null): string {
   return user?.name ?? user?.sub ?? '';
 }
 
-function withParticipantName(document: DisclosureDocument, user: AuthenticatedUser | null): DisclosureDocument {
+function withParticipantName(document: FinancialInterestsDocument, user: AuthenticatedUser | null): FinancialInterestsDocument {
   const result = cloneDocument(document);
   const displayName = deriveDisplayName(user);
   if (displayName) {
@@ -1604,105 +1823,18 @@ function withParticipantName(document: DisclosureDocument, user: AuthenticatedUs
   return result;
 }
 
-function cloneDocument(source: DisclosureDocument): DisclosureDocument {
+function cloneDocument(source: FinancialInterestsDocument): FinancialInterestsDocument {
   return {
     recordYear: source.recordYear,
     participant: {
       name: source.participant.name,
-      hl7Roles: [...source.participant.hl7Roles],
-      consentPublic: source.participant.consentPublic
+      hl7Roles: [...source.participant.hl7Roles]
     },
     roles: source.roles.map((role) => ({ ...role })),
     financial: source.financial.map((entry) => ({ ...entry })),
     ownerships: source.ownerships.map((entry) => ({ ...entry })),
     gifts: source.gifts.map((entry) => ({ ...entry })),
     certificationChecked: source.certificationChecked
-  };
-}
-
-async function fetchQuestionnaire(accessToken: string): Promise<Questionnaire> {
-  const config = await getAppConfig();
-  const canonical = config.questionnaire ?? { url: '', version: '' };
-  const search = new URLSearchParams();
-  if (canonical.url) search.set('url', canonical.url);
-  if (canonical.version) search.set('version', canonical.version);
-  search.set('_count', '1');
-  const res = await fhirFetch(`/Questionnaire?${search.toString()}`, accessToken);
-  const bundle = await res.json() as { entry?: { resource?: Questionnaire }[] };
-  const questionnaire = bundle.entry?.[0]?.resource;
-  if (!questionnaire) throw new Error('Questionnaire not found');
-  return questionnaire;
-}
-
-async function fetchExistingResponses(user: AuthenticatedUser, questionnaire: Questionnaire): Promise<ExistingResponseLoad> {
-  const canonical = await canonicalFromQuestionnaire(questionnaire);
-  const searchDraft = new URLSearchParams();
-  searchDraft.set('subject:identifier', `${user.subjectSystem}|${user.sub}`);
-  searchDraft.set('questionnaire', canonical);
-  searchDraft.set('status', 'in-progress');
-  searchDraft.set('_count', '5');
-  const draftRes = await fhirFetch(`/QuestionnaireResponse?${searchDraft.toString()}`, user.accessToken);
-  const draftBundle = await draftRes.json() as FhirBundle<QuestionnaireResponse>;
-  const draftList = (draftBundle.entry ?? [])
-    .map((entry) => entry.resource)
-    .filter((resource): resource is QuestionnaireResponse => Boolean(resource))
-    .sort((a, b) => {
-      const authoredA = Date.parse(a?.authored ?? '') || 0;
-      const authoredB = Date.parse(b?.authored ?? '') || 0;
-      return authoredB - authoredA;
-    });
-  let draft = draftList[0] ?? null;
-
-  const searchCompleted = new URLSearchParams();
-  searchCompleted.set('subject:identifier', `${user.subjectSystem}|${user.sub}`);
-  searchCompleted.set('questionnaire', canonical);
-  searchCompleted.set('status', 'completed');
-  searchCompleted.set('_count', '50');
-  const completedRes = await fhirFetch(`/QuestionnaireResponse?${searchCompleted.toString()}`, user.accessToken);
-  const completedBundle = await completedRes.json() as FhirBundle<QuestionnaireResponse>;
-  const completedList = (completedBundle.entry ?? [])
-    .map((entry) => entry.resource)
-    .filter((resource): resource is QuestionnaireResponse => Boolean(resource));
-
-  const completedHistory = completedList
-    .map((response, index) => {
-      const document = questionnaireResponseToDocument(questionnaire, response);
-      const key = response.id
-        ?? response.meta?.lastUpdated
-        ?? response.authored
-        ?? `history-${index}`;
-      return {
-        key,
-        response,
-        document
-      } satisfies CompletedHistoryEntry;
-    })
-    .sort((a, b) => {
-      const authoredA = Date.parse(a.response.authored ?? '') || 0;
-      const authoredB = Date.parse(b.response.authored ?? '') || 0;
-      return authoredA - authoredB;
-    });
-
-  const latestCompleted = completedHistory.length > 0 ? completedHistory[completedHistory.length - 1] : null;
-  const baseDocument = draft
-    ? questionnaireResponseToDocument(questionnaire, draft)
-    : latestCompleted
-    ? latestCompleted.document
-    : initialDocument();
-
-  if (!draft) {
-    draft = await createDraftQuestionnaireResponse(user, questionnaire, baseDocument);
-  }
-
-  return {
-    document: cloneDocument(baseDocument),
-    responseId: draft.id ?? null,
-    latestSubmitted: latestCompleted ? cloneDocument(latestCompleted.document) : undefined,
-    completedHistory: completedHistory.map((entry) => ({
-      key: entry.key,
-      response: entry.response,
-      document: cloneDocument(entry.document)
-    }))
   };
 }
 
@@ -1717,47 +1849,359 @@ async function canonicalFromQuestionnaire(questionnaire: Questionnaire): Promise
   return version ? `${url}|${version}` : url;
 }
 
-async function upsertQuestionnaireResponse(accessToken: string, payload: QuestionnaireResponse, existingId?: string | null): Promise<QuestionnaireResponse> {
-  const method = existingId ? 'PUT' : 'POST';
-  const path = existingId ? `/QuestionnaireResponse/${existingId}` : '/QuestionnaireResponse';
-  const res = await fhirFetch(path, accessToken, {
-    method,
-    body: JSON.stringify(payload)
-  });
-  return (await res.json()) as QuestionnaireResponse;
-}
-
-async function createDraftQuestionnaireResponse(user: AuthenticatedUser, questionnaire: Questionnaire, document: DisclosureDocument) {
-  const payload = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
-  payload.subject = {
-    identifier: {
-      system: user.subjectSystem,
-      value: user.sub
-    },
-    display: user.name ?? user.sub
-  };
-  return upsertQuestionnaireResponse(user.accessToken, payload);
-}
-
-async function fhirFetch(path: string, accessToken: string, init: RequestInit = {}): Promise<Response> {
-  const config = await getAppConfig();
-  const base = config.fhirBaseUrl.replace(/\/$/, '');
-  const url = path.startsWith('http') ? path : `${base}${path.startsWith('/') ? path : `/${path}`}`;
-  const headers = new Headers(init.headers as HeadersInit | undefined);
-  headers.set('Accept', 'application/fhir+json');
-  headers.set('Authorization', `Bearer ${accessToken}`);
-  if (init.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/fhir+json');
+class FhirSubmissionBackend implements SubmissionBackend {
+  async fetchQuestionnaire(user: AuthenticatedUser): Promise<Questionnaire> {
+    const config = await getAppConfig();
+    const canonical = config.questionnaire ?? { url: '', version: '' };
+    const search = new URLSearchParams();
+    if (canonical.url) search.set('url', canonical.url);
+    if (canonical.version) search.set('version', canonical.version);
+    search.set('_count', '1');
+    const res = await this.fhirFetch(`/Questionnaire?${search.toString()}`, user.accessToken);
+    const bundle = await res.json() as { entry?: { resource?: Questionnaire }[] };
+    const questionnaire = bundle.entry?.[0]?.resource;
+    if (!questionnaire) throw new Error('Questionnaire not found');
+    return questionnaire;
   }
-  const response = await fetch(url, { ...init, headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `FHIR request failed (${response.status})`);
+
+  async loadExisting(user: AuthenticatedUser, questionnaire: Questionnaire): Promise<ExistingResponseLoad> {
+    const canonical = await canonicalFromQuestionnaire(questionnaire);
+    const searchDraft = new URLSearchParams();
+    searchDraft.set('subject:identifier', `${user.subjectSystem}|${user.sub}`);
+    searchDraft.set('questionnaire', canonical);
+    searchDraft.set('status', 'in-progress');
+    searchDraft.set('_count', '5');
+    const draftRes = await this.fhirFetch(`/QuestionnaireResponse?${searchDraft.toString()}`, user.accessToken);
+    const draftBundle = await draftRes.json() as FhirBundle<QuestionnaireResponse>;
+    const draftList = (draftBundle.entry ?? [])
+      .map((entry) => entry.resource)
+      .filter((resource): resource is QuestionnaireResponse => Boolean(resource))
+      .sort((a, b) => {
+        const authoredA = Date.parse(a?.authored ?? '') || 0;
+        const authoredB = Date.parse(b?.authored ?? '') || 0;
+        return authoredB - authoredA;
+      });
+    let draft = draftList[0] ?? null;
+
+    const searchCompleted = new URLSearchParams();
+    searchCompleted.set('subject:identifier', `${user.subjectSystem}|${user.sub}`);
+    searchCompleted.set('questionnaire', canonical);
+    searchCompleted.set('status', 'completed');
+    searchCompleted.set('_count', '50');
+    const completedRes = await this.fhirFetch(`/QuestionnaireResponse?${searchCompleted.toString()}`, user.accessToken);
+    const completedBundle = await completedRes.json() as FhirBundle<QuestionnaireResponse>;
+    const completedList = (completedBundle.entry ?? [])
+      .map((entry) => entry.resource)
+      .filter((resource): resource is QuestionnaireResponse => Boolean(resource));
+
+    const completedHistory = completedList
+      .map((response, index) => {
+        const document = questionnaireResponseToDocument(questionnaire, response);
+        const key = response.id
+          ?? response.meta?.lastUpdated
+          ?? response.authored
+          ?? `history-${index}`;
+        return {
+          key,
+          response,
+          document
+        } satisfies CompletedHistoryEntry;
+      })
+      .sort((a, b) => {
+        const authoredA = Date.parse(a.response.authored ?? '') || 0;
+        const authoredB = Date.parse(b.response.authored ?? '') || 0;
+        return authoredA - authoredB;
+      });
+
+    const latestCompleted = completedHistory.length > 0 ? completedHistory[completedHistory.length - 1] : null;
+    const baseDocument = draft
+      ? questionnaireResponseToDocument(questionnaire, draft)
+      : latestCompleted
+      ? latestCompleted.document
+      : initialDocument();
+
+    if (!draft) {
+      draft = await this.createDraftQuestionnaireResponse(user, questionnaire, baseDocument);
+    }
+
+    return {
+      document: cloneDocument(baseDocument),
+      responseId: draft.id ?? null,
+      latestSubmitted: latestCompleted ? cloneDocument(latestCompleted.document) : undefined,
+      completedHistory: completedHistory.map((entry) => ({
+        key: entry.key,
+        response: entry.response,
+        document: cloneDocument(entry.document)
+      }))
+    };
   }
-  return response;
+
+  async saveDraft(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse> {
+    const payload = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
+    this.applySubject(payload, user);
+    return this.upsertQuestionnaireResponse(user.accessToken, payload, responseId ?? undefined);
+  }
+
+  async submit(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse> {
+    const payload = await documentToQuestionnaireResponse(questionnaire, document, 'completed');
+    this.applySubject(payload, user);
+    return this.upsertQuestionnaireResponse(user.accessToken, payload, responseId ?? undefined);
+  }
+
+  private applySubject(payload: QuestionnaireResponse, user: AuthenticatedUser) {
+    payload.subject = {
+      identifier: {
+        system: user.subjectSystem,
+        value: user.sub
+      },
+      display: deriveDisplayName(user)
+    };
+  }
+
+  private async createDraftQuestionnaireResponse(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument
+  ) {
+    const payload = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
+    this.applySubject(payload, user);
+    return this.upsertQuestionnaireResponse(user.accessToken, payload);
+  }
+
+  private async upsertQuestionnaireResponse(
+    accessToken: string,
+    payload: QuestionnaireResponse,
+    existingId?: string
+  ): Promise<QuestionnaireResponse> {
+    const method = existingId ? 'PUT' : 'POST';
+    const path = existingId ? `/QuestionnaireResponse/${existingId}` : '/QuestionnaireResponse';
+    const res = await this.fhirFetch(path, accessToken, {
+      method,
+      body: JSON.stringify(payload)
+    });
+    return (await res.json()) as QuestionnaireResponse;
+  }
+
+  private async fhirFetch(path: string, accessToken: string, init: RequestInit = {}): Promise<Response> {
+    const config = await getAppConfig();
+    const base = config.fhirBaseUrl.replace(/\/$/, '');
+    const url = path.startsWith('http') ? path : `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    const headers = new Headers(init.headers as HeadersInit | undefined);
+    headers.set('Accept', 'application/fhir+json');
+    headers.set('Authorization', `Bearer ${accessToken}`);
+    if (init.body && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/fhir+json');
+    }
+    const response = await fetch(url, { ...init, headers });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `FHIR request failed (${response.status})`);
+    }
+    return response;
+  }
 }
 
-function questionnaireResponseToDocument(questionnaire: Questionnaire, response: QuestionnaireResponse): DisclosureDocument {
+type StaticStoredResponse = {
+  id: string;
+  authored: string;
+  response: QuestionnaireResponse;
+};
+
+type StaticStore = {
+  drafts: Record<string, StaticStoredResponse>;
+  submissions: Record<string, StaticStoredResponse[]>;
+};
+
+class StaticSubmissionBackend implements SubmissionBackend {
+  async fetchQuestionnaire(_user: AuthenticatedUser): Promise<Questionnaire> {
+    const config = await getAppConfig();
+    const resource = config.questionnaireResource;
+    if (resource && typeof resource === 'object') {
+      return this.cloneQuestionnaire(resource as Questionnaire);
+    }
+    throw new Error('Static mode requires questionnaireResource in app config');
+  }
+
+  async loadExisting(user: AuthenticatedUser, questionnaire: Questionnaire): Promise<ExistingResponseLoad> {
+    const canonical = await canonicalFromQuestionnaire(questionnaire);
+    const store = this.readStore(user);
+    const draftEntry = await this.ensureDraft(user, questionnaire, store, canonical);
+    const baseDocument = questionnaireResponseToDocument(questionnaire, draftEntry.response);
+
+    const submissions = [...(store.submissions[canonical] ?? [])].sort((a, b) => {
+      const aTime = Date.parse(a.authored) || 0;
+      const bTime = Date.parse(b.authored) || 0;
+      return aTime - bTime;
+    });
+
+    const completedHistory = submissions.map((entry, index) => {
+      const response = this.cloneResponse(entry.response);
+      const document = questionnaireResponseToDocument(questionnaire, response);
+      const key = response.id ?? response.meta?.lastUpdated ?? response.authored ?? `history-${index}`;
+      return {
+        key,
+        response,
+        document: cloneDocument(document)
+      } satisfies CompletedHistoryEntry;
+    });
+
+    const latestSubmitted = completedHistory.length > 0
+      ? cloneDocument(completedHistory[completedHistory.length - 1].document)
+      : undefined;
+
+    return {
+      document: cloneDocument(baseDocument),
+      responseId: draftEntry.response.id ?? null,
+      latestSubmitted,
+      completedHistory
+    };
+  }
+
+  async saveDraft(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse> {
+    const canonical = await canonicalFromQuestionnaire(questionnaire);
+    const store = this.readStore(user);
+    const payload = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
+    this.applySubject(payload, user);
+    const id = responseId ?? payload.id ?? this.generateId();
+    payload.id = id;
+    const timestamp = new Date().toISOString();
+    payload.authored = timestamp;
+    payload.meta = { ...(payload.meta ?? {}), lastUpdated: timestamp };
+    store.drafts[canonical] = {
+      id,
+      authored: timestamp,
+      response: this.cloneResponse(payload)
+    };
+    this.writeStore(user, store);
+    return this.cloneResponse(payload);
+  }
+
+  async submit(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    document: FinancialInterestsDocument,
+    responseId: string | null
+  ): Promise<QuestionnaireResponse> {
+    const canonical = await canonicalFromQuestionnaire(questionnaire);
+    const store = this.readStore(user);
+    const payload = await documentToQuestionnaireResponse(questionnaire, document, 'completed');
+    this.applySubject(payload, user);
+    const id = responseId ?? payload.id ?? this.generateId();
+    payload.id = id;
+    const timestamp = new Date().toISOString();
+    payload.authored = timestamp;
+    payload.meta = { ...(payload.meta ?? {}), lastUpdated: timestamp };
+    const storedResponse: StaticStoredResponse = {
+      id,
+      authored: timestamp,
+      response: this.cloneResponse(payload)
+    };
+    const submissions = store.submissions[canonical] ?? [];
+    submissions.push(storedResponse);
+    store.submissions[canonical] = submissions;
+    delete store.drafts[canonical];
+    this.writeStore(user, store);
+    return this.cloneResponse(payload);
+  }
+
+  private applySubject(payload: QuestionnaireResponse, user: AuthenticatedUser) {
+    payload.subject = {
+      identifier: {
+        system: user.subjectSystem,
+        value: user.sub
+      },
+      display: deriveDisplayName(user)
+    };
+  }
+
+  private async ensureDraft(
+    user: AuthenticatedUser,
+    questionnaire: Questionnaire,
+    store: StaticStore,
+    canonical: string
+  ): Promise<StaticStoredResponse> {
+    const existing = store.drafts[canonical];
+    if (existing) return existing;
+    const document = initialDocument();
+    const response = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
+    this.applySubject(response, user);
+    const id = this.generateId();
+    const timestamp = new Date().toISOString();
+    response.id = id;
+    response.authored = timestamp;
+    response.meta = { ...(response.meta ?? {}), lastUpdated: timestamp };
+    const stored: StaticStoredResponse = {
+      id,
+      authored: timestamp,
+      response: this.cloneResponse(response)
+    };
+    store.drafts[canonical] = stored;
+    this.writeStore(user, store);
+    return stored;
+  }
+
+  private readStore(user: AuthenticatedUser): StaticStore {
+    try {
+      const raw = localStorage.getItem(this.storageKey(user));
+      if (!raw) {
+        return { drafts: {}, submissions: {} };
+      }
+      const parsed = JSON.parse(raw) as Partial<StaticStore> | null;
+      return {
+        drafts: parsed?.drafts ?? {},
+        submissions: parsed?.submissions ?? {}
+      };
+    } catch {
+      return { drafts: {}, submissions: {} };
+    }
+  }
+
+  private writeStore(user: AuthenticatedUser, store: StaticStore) {
+    localStorage.setItem(this.storageKey(user), JSON.stringify(store));
+  }
+
+  private storageKey(user: AuthenticatedUser): string {
+    return `fi.static.v1::${user.subjectSystem}|${user.sub}`;
+  }
+
+  private cloneResponse(response: QuestionnaireResponse): QuestionnaireResponse {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(response);
+    }
+    return JSON.parse(JSON.stringify(response)) as QuestionnaireResponse;
+  }
+
+  private cloneQuestionnaire(questionnaire: Questionnaire): Questionnaire {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(questionnaire);
+    }
+    return JSON.parse(JSON.stringify(questionnaire)) as Questionnaire;
+  }
+
+  private generateId(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID();
+    }
+    return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function questionnaireResponseToDocument(questionnaire: Questionnaire, response: QuestionnaireResponse): FinancialInterestsDocument {
   const doc = initialDocument();
   const items = response.item ?? [];
   const participantGroup = findItem(items, 'participant');
@@ -1773,7 +2217,6 @@ function questionnaireResponseToDocument(questionnaire: Questionnaire, response:
       }
     }
     doc.participant.hl7Roles = getCodingList(participantGroup, 'participant.hl7Roles');
-    doc.participant.consentPublic = getBoolean(participantGroup, 'participant.consentPublic');
   }
   const roleGroups = findItems(items, 'roles');
   doc.roles = roleGroups.map((group) => ({
@@ -1781,8 +2224,7 @@ function questionnaireResponseToDocument(questionnaire: Questionnaire, response:
     entityType: (getCoding(group, 'roles.entityType') as EntityType) || 'for_profit',
     role: getString(group, 'roles.role'),
     paid: getBoolean(group, 'roles.paid'),
-    primaryEmployer: getBoolean(group, 'roles.primaryEmployer'),
-    aboveThreshold: decodeAboveThreshold(getCoding(group, 'roles.aboveThreshold'))
+    primaryEmployer: getBoolean(group, 'roles.primaryEmployer')
   })).filter((role) => role.entityName || role.role);
 
   const financialGroups = findItems(items, 'financial');
@@ -1797,7 +2239,7 @@ function questionnaireResponseToDocument(questionnaire: Questionnaire, response:
   doc.ownerships = ownershipGroups.map((group) => ({
     entityName: getString(group, 'ownerships.entityName'),
     entityType: (getCoding(group, 'ownerships.entityType') as EntityType) || 'public',
-    tier: (getCoding(group, 'ownerships.tier') as OwnershipDisclosure['tier']) || '1-5%'
+    tier: (getCoding(group, 'ownerships.tier') as OwnershipInterest['tier']) || '1-5%'
   })).filter((entry) => entry.entityName);
 
   const giftGroups = findItems(items, 'gifts');
@@ -1814,7 +2256,7 @@ function questionnaireResponseToDocument(questionnaire: Questionnaire, response:
   return doc;
 }
 
-async function documentToQuestionnaireResponse(questionnaire: Questionnaire, document: DisclosureDocument, status: 'in-progress' | 'completed'): Promise<QuestionnaireResponse> {
+async function documentToQuestionnaireResponse(questionnaire: Questionnaire, document: FinancialInterestsDocument, status: 'in-progress' | 'completed'): Promise<QuestionnaireResponse> {
   const canonical = await canonicalFromQuestionnaire(questionnaire);
   const response: QuestionnaireResponse = {
     resourceType: 'QuestionnaireResponse',
@@ -1875,16 +2317,13 @@ function buildParticipantItem(template: QuestionnaireItem, participant: Particip
         if (child.linkId === 'participant.hl7Roles') {
           return answerItem(child, participant.hl7Roles.map((code) => ({ valueCoding: { code, display: code } })));
         }
-        if (child.linkId === 'participant.consentPublic') {
-          return answerItem(child, [{ valueBoolean: participant.consentPublic }]);
-        }
         return null;
       })
       .filter((child): child is QuestionnaireResponseItem => Boolean(child))
   };
 }
 
-function buildRoleItem(template: QuestionnaireItem, role: RoleDisclosure): QuestionnaireResponseItem {
+function buildRoleItem(template: QuestionnaireItem, role: RoleInterest): QuestionnaireResponseItem {
   return {
     linkId: template.linkId,
     text: template.text,
@@ -1900,13 +2339,6 @@ function buildRoleItem(template: QuestionnaireItem, role: RoleDisclosure): Quest
           return answerItem(child, [{ valueBoolean: role.primaryEmployer }]);
         case 'roles.paid':
           return answerItem(child, [{ valueBoolean: role.paid }]);
-        case 'roles.aboveThreshold':
-          return answerItem(
-            child,
-            role.aboveThreshold === null
-              ? []
-              : [{ valueCoding: { code: role.aboveThreshold ? 'true' : 'false', display: role.aboveThreshold ? 'Yes' : 'No' } }]
-          );
         default:
           return answerItem(child, []);
       }
@@ -1914,7 +2346,7 @@ function buildRoleItem(template: QuestionnaireItem, role: RoleDisclosure): Quest
   };
 }
 
-function buildFinancialItem(template: QuestionnaireItem, entry: FinancialDisclosure): QuestionnaireResponseItem {
+function buildFinancialItem(template: QuestionnaireItem, entry: FundingInterest): QuestionnaireResponseItem {
   return {
     linkId: template.linkId,
     text: template.text,
@@ -1935,7 +2367,7 @@ function buildFinancialItem(template: QuestionnaireItem, entry: FinancialDisclos
   };
 }
 
-function buildOwnershipItem(template: QuestionnaireItem, entry: OwnershipDisclosure): QuestionnaireResponseItem {
+function buildOwnershipItem(template: QuestionnaireItem, entry: OwnershipInterest): QuestionnaireResponseItem {
   return {
     linkId: template.linkId,
     text: template.text,
@@ -1954,7 +2386,7 @@ function buildOwnershipItem(template: QuestionnaireItem, entry: OwnershipDisclos
   };
 }
 
-function buildGiftItem(template: QuestionnaireItem, entry: GiftDisclosure): QuestionnaireResponseItem {
+function buildGiftItem(template: QuestionnaireItem, entry: GiftInterest): QuestionnaireResponseItem {
   return {
     linkId: template.linkId,
     text: template.text,
@@ -2022,12 +2454,6 @@ function getCodingList(group: QuestionnaireResponseItem | undefined, childLinkId
   const item = group ? findItem(group.item, childLinkId) : undefined;
   if (!item?.answer) return [];
   return item.answer.map((ans) => ans.valueCoding?.code).filter((code): code is string => Boolean(code));
-}
-
-function decodeAboveThreshold(code: string): boolean | null {
-  if (code === 'true') return true;
-  if (code === 'false') return false;
-  return null;
 }
 
 function findQuestionnaireItem(items: QuestionnaireItem[], linkId: string): QuestionnaireItem | undefined {
