@@ -1,28 +1,12 @@
 import tailwind from 'bun-plugin-tailwind';
 
-const watch = process.argv.includes('--watch');
-
 const result = await Bun.build({
   entrypoints: ['./index.html'],
   outdir: './dist',
-  minify: !watch,
+  minify: process.env.NODE_ENV === 'production',
   target: 'browser',
   plugins: [tailwind],
-  sourcemap: watch ? 'inline' : false,
-  watch: watch
-    ? {
-        async onRebuild(err, buildResult) {
-          if (err) {
-            console.error('❌ Rebuild failed');
-            for (const log of err.logs ?? []) {
-              console.error(log);
-            }
-          } else {
-            console.log(`🔁 Rebuilt ${buildResult.outputs.length} file(s)`);
-          }
-        }
-      }
-    : undefined
+  sourcemap: process.env.NODE_ENV === 'production' ? false : 'inline'
 });
 
 if (!result.success) {
@@ -34,8 +18,3 @@ if (!result.success) {
 }
 
 console.log(`✅ Bundled ${result.outputs.length} file(s) to dist/`);
-
-if (watch) {
-  console.log('👀 Watching for changes...');
-  await new Promise(() => {});
-}

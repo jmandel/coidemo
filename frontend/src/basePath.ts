@@ -1,4 +1,4 @@
-const ROUTE_ROOTS = new Set(['', 'form', 'history', 'submitted']);
+const ROUTE_SEGMENTS = new Set(['form', 'history', 'submitted']);
 let cachedBasePath: string | null = null;
 
 function normalize(path: string): string {
@@ -7,23 +7,23 @@ function normalize(path: string): string {
   return path || '/';
 }
 
-export function getBasePath(): string {
-  if (cachedBasePath) return cachedBasePath;
+function computeBasePath(): string {
   try {
     const segments = window.location.pathname.split('/').filter(Boolean);
-    for (let i = 0; i <= segments.length; i++) {
-      const remaining = segments.slice(i);
-      const first = remaining[0] ?? '';
-      if (remaining.length === 0 || ROUTE_ROOTS.has(first)) {
-        const baseSegments = segments.slice(0, i);
-        cachedBasePath = baseSegments.length ? normalize(baseSegments.join('/')) : '/';
-        return cachedBasePath;
-      }
+    while (segments.length > 0 && ROUTE_SEGMENTS.has(segments[segments.length - 1])) {
+      segments.pop();
     }
+    const base = segments.join('/');
+    return base ? normalize(base) : '/';
   } catch {
-    /* ignore */
+    return '/';
   }
-  cachedBasePath = '/';
+}
+
+export function getBasePath(): string {
+  if (!cachedBasePath) {
+    cachedBasePath = computeBasePath();
+  }
   return cachedBasePath;
 }
 
