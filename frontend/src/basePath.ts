@@ -32,12 +32,3 @@ export function withBasePath(relative: string): string {
   const clean = relative.startsWith('/') ? relative.slice(1) : relative;
   return basePath === '/' ? `/${clean}` : `${basePath}/${clean}`;
 }
-
-export function stripBasePath(pathname: string): string {
-  const basePath = getBasePath();
-  if (basePath === '/' || !pathname.startsWith(basePath)) {
-    return pathname.startsWith('/') ? pathname : `/${pathname}`;
-  }
-  const stripped = pathname.slice(basePath.length);
-  return stripped.startsWith('/') ? stripped : `/${stripped}`;
-}

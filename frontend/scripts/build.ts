@@ -1,12 +1,17 @@
 import tailwind from 'bun-plugin-tailwind';
 
+const baseHref = process.env.BASE_PATH && process.env.BASE_PATH !== '/' ? `${process.env.BASE_PATH}/` : '/';
+
 const result = await Bun.build({
   entrypoints: ['./index.html'],
   outdir: './dist',
   minify: process.env.NODE_ENV === 'production',
   target: 'browser',
   plugins: [tailwind],
-  sourcemap: process.env.NODE_ENV === 'production' ? false : 'inline'
+  sourcemap: process.env.NODE_ENV === 'production' ? false : 'inline',
+  define: {
+    __BASE_HREF__: JSON.stringify(baseHref)
+  }
 });
 
 if (!result.success) {

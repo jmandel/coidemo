@@ -7,6 +7,12 @@
 
   </head>
   <body>
+    <script>
+      const href = typeof __BASE_HREF__ === 'string' ? __BASE_HREF__ : '/';
+      const base = document.createElement('base');
+      base.setAttribute('href', href);
+      document.head.insertBefore(base, document.head.firstChild);
+    </script>
     <div id="root"></div>
     <script type="module" src="./src/main.tsx"></script>
   </body>
