@@ -957,7 +957,6 @@ function HistoryPage() {
               const authored = entry.response.authored ?? entry.response.meta?.lastUpdated ?? '';
               const label = authored ? formatDateTime(authored) : 'Unknown submission';
               const summary = formatSummaryCounts(summarizeDocumentCounts(entry.document));
-              const href = `/history/${encodeURIComponent(entry.key)}`;
               const isActive = selectedEntry?.key === entry.key;
               return (
                 <li
