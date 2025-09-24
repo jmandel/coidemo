@@ -1,10 +1,7 @@
 import React, {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
-  useMemo,
-  useState
+  useMemo
 } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -168,20 +165,6 @@ type AuthenticatedUser = {
   subjectSystem: string;
 };
 
-type AuthContextValue = {
-  status: AuthStatus;
-  user: AuthenticatedUser | null;
-  login: () => Promise<void> | void;
-  logout: () => void;
-};
-
-const AuthContext = createContext<AuthContextValue>({
-  status: 'loading',
-  user: null,
-  login: () => undefined,
-  logout: () => undefined
-});
-
 type SubmissionBackend = {
   fetchQuestionnaire(user: AuthenticatedUser): Promise<Questionnaire>;
   loadExisting(user: AuthenticatedUser, questionnaire: Questionnaire): Promise<ExistingResponseLoad>;
@@ -261,6 +244,12 @@ type AutoSaveState = {
 };
 
 type FinancialInterestsStore = {
+  authStatus: AuthStatus;
+  setAuthStatus: (status: AuthStatus) => void;
+  resetAuth: () => void;
+  login: () => Promise<void> | void;
+  logout: () => void;
+  bootstrapAuth: () => Promise<void>;
   user: AuthenticatedUser | null;
   status: 'idle' | 'loading' | 'ready' | 'submitting' | 'error';
   error: string | null;
@@ -343,7 +332,143 @@ const financialInterestsStore = createStore<FinancialInterestsStore>((set, get) 
     });
   };
 
+  const performPostLoginRedirect = () => {
+    const target = sessionStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+    if (!target) return;
+    sessionStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+    const absolute = routerBasename === '/' ? target : `${routerBasename}${target}`;
+    window.history.replaceState({}, document.title, absolute);
+  };
+
+  const establishAuthFromTokens = async (tokens: StoredTokens | null): Promise<void> => {
+    if (!tokens) {
+      clearStoredTokens();
+      get().setUser(null);
+      return;
+    }
+    if (tokens.expiresAt && tokens.expiresAt < Date.now()) {
+      clearStoredTokens();
+      get().setUser(null);
+      return;
+    }
+
+    const config = window.__APP_CONFIG ?? await getAppConfig();
+    if (!window.__APP_CONFIG) {
+      window.__APP_CONFIG = config;
+    }
+
+    const idClaims = tokens.idToken ? decodeIdToken(tokens.idToken) : null;
+    let claims = idClaims ?? {};
+
+    const missingDisplayName = !getClaim(claims, 'name') && !getClaim(claims, 'preferred_username');
+    const missingEmail = !getClaim(claims, 'email');
+    const needsProfileClaims = missingDisplayName || missingEmail;
+    if (!config.mockAuth && needsProfileClaims && tokens.accessToken) {
+      const userInfo = await fetchUserInfo(tokens.accessToken);
+      if (userInfo) {
+        claims = { ...userInfo, ...claims };
+      }
+    }
+
+    const sub = getClaim(claims, 'sub') ?? 'anonymous';
+    const issuerCandidate =
+      getClaim(claims, 'iss') ??
+      config.oidcIssuer ??
+      (config.mockAuth ? 'urn:mock' : '');
+    const issuer = issuerCandidate && issuerCandidate.length > 0
+      ? issuerCandidate
+      : (config.mockAuth ? 'urn:mock' : (config.oidcIssuer ?? ''));
+    const displayName =
+      getClaim(claims, 'name') ??
+      getClaim(claims, 'preferred_username') ??
+      getClaim(claims, 'email');
+
+    const authedUser: AuthenticatedUser = {
+      sub,
+      name: displayName,
+      accessToken: tokens.accessToken,
+      idToken: tokens.idToken,
+      issuer,
+      subjectSystem: `${issuer || 'urn:mock'}#sub`
+    };
+
+    get().setUser(authedUser);
+  };
+
   return {
+    authStatus: 'loading',
+    setAuthStatus: (authStatus) => set({ authStatus }),
+    resetAuth: () => {
+      get().setAuthStatus('unauthenticated');
+      get().setUser(null);
+    },
+    login: async () => {
+      try {
+        get().setAuthStatus('loading');
+        const config = await getAppConfig();
+        if (!window.__APP_CONFIG) {
+          window.__APP_CONFIG = config;
+        }
+        const relativePath = relativeToBase(window.location.pathname);
+        const redirectTarget = `${relativePath}${window.location.search ?? ''}${window.location.hash ?? ''}`;
+        sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectTarget);
+        if (config.staticMode && config.mockAuth) {
+          const defaults = defaultMockClaims();
+          const email = window.prompt('Mock email address', defaults.email) ?? '';
+          if (!email) {
+            get().resetAuth();
+            return;
+          }
+          const name = window.prompt('Display name', defaults.name ?? email) ?? email;
+          const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
+          const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
+          const tokens = createMockTokens(claims, config);
+          setStoredTokens(tokens);
+          await establishAuthFromTokens(tokens);
+          performPostLoginRedirect();
+          return;
+        }
+        if (config.mockAuth) {
+          const defaults = defaultMockClaims();
+          const email = window.prompt('Mock email address', defaults.email) ?? '';
+          if (!email) {
+            get().resetAuth();
+            return;
+          }
+          const name = window.prompt('Display name', defaults.name ?? email) ?? email;
+          const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
+          const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
+          await oauthStartLogin({ mockClaims: claims });
+        } else {
+          await oauthStartLogin();
+        }
+      } catch (error) {
+        console.error('Login error', error);
+        clearStoredTokens();
+        get().resetAuth();
+      }
+    },
+    logout: () => {
+      clearStoredTokens();
+      get().resetAuth();
+    },
+    bootstrapAuth: async () => {
+      try {
+        set({ authStatus: 'loading' });
+        const tokens = await handleRedirect();
+        if (tokens) {
+          await establishAuthFromTokens(tokens);
+          performPostLoginRedirect();
+          return;
+        }
+        await establishAuthFromTokens(getStoredTokens());
+        performPostLoginRedirect();
+      } catch (error) {
+        console.error('Authentication error', error);
+        clearStoredTokens();
+        get().resetAuth();
+      }
+    },
     user: null,
     status: 'idle',
     error: null,
@@ -372,6 +497,7 @@ const financialInterestsStore = createStore<FinancialInterestsStore>((set, get) 
       if (!user) {
         resetAutoSaveState();
         set({
+          authStatus: 'unauthenticated',
           user: null,
           status: 'idle',
           questionnaire: null,
@@ -387,13 +513,13 @@ const financialInterestsStore = createStore<FinancialInterestsStore>((set, get) 
         });
         return;
       }
-      const sameUser = prevUser && prevUser.sub === user.sub;
-      const currentDoc = sameUser ? get().document : initialDocument();
-      const nextDoc = withParticipantName(currentDoc, user);
-      set({ user, document: nextDoc });
-      if (!sameUser) {
-        set({
-          status: 'idle',
+        const sameUser = prevUser && prevUser.sub === user.sub;
+        const currentDoc = sameUser ? get().document : initialDocument();
+        const nextDoc = withParticipantName(currentDoc, user);
+        set({ authStatus: 'authenticated', user, document: nextDoc });
+        if (!sameUser) {
+          set({
+            status: 'idle',
           questionnaire: null,
           responseId: null,
           latestSubmitted: null,
@@ -572,166 +698,22 @@ const financialInterestsStore = createStore<FinancialInterestsStore>((set, get) 
   };
 });
 
+if (typeof window !== 'undefined') {
+  void financialInterestsStore.getState().bootstrapAuth();
+}
+
 const useFinancialInterestsStore = <T,>(selector: (state: FinancialInterestsStore) => T) => useStore(financialInterestsStore, selector);
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>('loading');
-  const [user, setUser] = useState<AuthenticatedUser | null>(null);
-  const navigate = useNavigate();
-
-  const performPostLoginRedirect = useCallback(() => {
-    const target = sessionStorage.getItem(POST_LOGIN_REDIRECT_KEY);
-    if (!target) return;
-    sessionStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
-    navigate(target, { replace: true });
-  }, [navigate]);
-
-  const establishAuthFromTokens = useCallback(async (tokens: StoredTokens | null) => {
-    if (!tokens) {
-      clearStoredTokens();
-      setUser(null);
-      setStatus('unauthenticated');
-      return;
-    }
-    if (tokens.expiresAt && tokens.expiresAt < Date.now()) {
-      clearStoredTokens();
-      setUser(null);
-      setStatus('unauthenticated');
-      return;
-    }
-    const idClaims = tokens.idToken ? decodeIdToken(tokens.idToken) : null;
-    const config = window.__APP_CONFIG ?? {
-      fhirBaseUrl: absolutePath('./fhir'),
-      oidcIssuer: null,
-      oidcClientId: null,
-      oidcRedirectUri: new URL('./', documentBase).toString(),
-      mockAuth: true,
-      staticMode: false,
-      questionnaire: null,
-      questionnaireResource: null
-    } satisfies AppConfig;
-    let claims = idClaims ?? {};
-
-    const missingDisplayName = !getClaim(claims, 'name') && !getClaim(claims, 'preferred_username');
-    const missingEmail = !getClaim(claims, 'email');
-    const needsProfileClaims = missingDisplayName || missingEmail;
-    if (!config.mockAuth && needsProfileClaims && tokens.accessToken) {
-      const userInfo = await fetchUserInfo(tokens.accessToken);
-      if (userInfo) {
-        claims = { ...userInfo, ...claims };
-      }
-    }
-    const sub =
-      getClaim(claims, 'sub') ??
-      'anonymous';
-    const issuerCandidate =
-      getClaim(claims, 'iss') ??
-      config.oidcIssuer ??
-      (config.mockAuth ? 'urn:mock' : '');
-    const issuer = issuerCandidate && issuerCandidate.length > 0
-      ? issuerCandidate
-      : (config.mockAuth ? 'urn:mock' : (config.oidcIssuer ?? ''));
-    const displayName =
-      getClaim(claims, 'name') ??
-      getClaim(claims, 'preferred_username') ??
-      getClaim(claims, 'email');
-
-    const authedUser: AuthenticatedUser = {
-      sub,
-      name: displayName,
-      accessToken: tokens.accessToken,
-      idToken: tokens.idToken,
-      issuer,
-      subjectSystem: `${issuer || 'urn:mock'}#sub`
-    };
-    setUser(authedUser);
-    setStatus('authenticated');
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const config = await getAppConfig();
-        if (!window.__APP_CONFIG) {
-          window.__APP_CONFIG = config;
-        }
-        const tokens = await handleRedirect();
-        if (tokens) {
-          await establishAuthFromTokens(tokens);
-          performPostLoginRedirect();
-          return;
-        }
-        await establishAuthFromTokens(getStoredTokens());
-        performPostLoginRedirect();
-      } catch (error) {
-        console.error('Authentication error', error);
-        clearStoredTokens();
-        setStatus('unauthenticated');
-      }
-    })();
-  }, [establishAuthFromTokens, performPostLoginRedirect]);
-
-  const login = useCallback(async () => {
-    try {
-      const config = await getAppConfig();
-      if (!window.__APP_CONFIG) {
-        window.__APP_CONFIG = config;
-      }
-      const relativePath = relativeToBase(window.location.pathname);
-      const redirectTarget = `${relativePath}${window.location.search ?? ''}${window.location.hash ?? ''}`;
-      sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectTarget);
-      if (config.staticMode && config.mockAuth) {
-        const defaults = defaultMockClaims();
-        const email = window.prompt('Mock email address', defaults.email) ?? '';
-        if (!email) {
-          setStatus('unauthenticated');
-          return;
-        }
-        const name = window.prompt('Display name', defaults.name ?? email) ?? email;
-        const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
-        const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
-        const tokens = createMockTokens(claims, config);
-        setStoredTokens(tokens);
-        await establishAuthFromTokens(tokens);
-        performPostLoginRedirect();
-        return;
-      }
-      if (config.mockAuth) {
-        const defaults = defaultMockClaims();
-        const email = window.prompt('Mock email address', defaults.email) ?? '';
-        if (!email) {
-          setStatus('unauthenticated');
-          return;
-        }
-        const name = window.prompt('Display name', defaults.name ?? email) ?? email;
-        const sub = window.prompt('Subject claim (sub)', defaults.sub ?? email) ?? email;
-        const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
-        await oauthStartLogin({ mockClaims: claims });
-      } else {
-        await oauthStartLogin();
-      }
-    } catch (error) {
-      console.error('Login error', error);
-      clearStoredTokens();
-      setStatus('unauthenticated');
-    }
-  }, [setStatus, establishAuthFromTokens, performPostLoginRedirect]);
-
-  const logout = useCallback(() => {
-    clearStoredTokens();
-    setUser(null);
-    setStatus('unauthenticated');
-  }, []);
-
-  const value = useMemo<AuthContextValue>(
-    () => ({ status, user, login, logout }),
-    [status, user, login, logout]
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <>{children}</>;
 }
+
 function useAuth() {
-  return useContext(AuthContext);
+  const status = useFinancialInterestsStore((state) => state.authStatus);
+  const user = useFinancialInterestsStore((state) => state.user);
+  const login = useFinancialInterestsStore((state) => state.login);
+  const logout = useFinancialInterestsStore((state) => state.logout);
+  return { status, user, login, logout };
 }
 
 function App() {
@@ -824,7 +806,13 @@ function Home() {
         ) : (
           <div>
             <p className="small">Sign in with your HL7 account to get started.</p>
-            <button className="primary" onClick={login}>Login</button>
+            <button
+              className="primary"
+              onClick={login}
+              disabled={status !== 'unauthenticated'}
+            >
+              {status === 'loading' ? 'Connecting…' : 'Login'}
+            </button>
           </div>
         )}
       </div>
@@ -912,7 +900,13 @@ function HistoryPage() {
         <div className="card">
           <h1>My History</h1>
           <p className="small">You must be logged in to view your filing history.</p>
-          <button className="primary" onClick={login}>Login</button>
+          <button
+            className="primary"
+            onClick={login}
+            disabled={authStatus !== 'unauthenticated'}
+          >
+            {authStatus === 'loading' ? 'Connecting…' : 'Login'}
+          </button>
         </div>
       </Layout>
     );
@@ -1049,7 +1043,13 @@ function FormPage() {
         <div className="card">
           <h1>Financial Interests Form</h1>
           <p className="small">You must be logged in to edit your filing.</p>
-          <button className="primary" onClick={login}>Login</button>
+          <button
+            className="primary"
+            onClick={login}
+            disabled={authStatus !== 'unauthenticated'}
+          >
+            {authStatus === 'loading' ? 'Connecting…' : 'Login'}
+          </button>
         </div>
       </Layout>
     );
@@ -1863,7 +1863,7 @@ class FhirSubmissionBackend implements SubmissionBackend {
     if (canonical.url) search.set('url', canonical.url);
     if (canonical.version) search.set('version', canonical.version);
     search.set('_count', '1');
-    const res = await this.fhirFetch(`/Questionnaire?${search.toString()}`, user.accessToken);
+    const res = await this.fhirFetch(`/Questionnaire?${search.toString()}`);
     const bundle = await res.json() as { entry?: { resource?: Questionnaire }[] };
     const questionnaire = bundle.entry?.[0]?.resource;
     if (!questionnaire) throw new Error('Questionnaire not found');
@@ -1877,7 +1877,7 @@ class FhirSubmissionBackend implements SubmissionBackend {
     searchDraft.set('questionnaire', canonical);
     searchDraft.set('status', 'in-progress');
     searchDraft.set('_count', '5');
-    const draftRes = await this.fhirFetch(`/QuestionnaireResponse?${searchDraft.toString()}`, user.accessToken);
+    const draftRes = await this.fhirFetch(`/QuestionnaireResponse?${searchDraft.toString()}`);
     const draftBundle = await draftRes.json() as FhirBundle<QuestionnaireResponse>;
     const draftList = (draftBundle.entry ?? [])
       .map((entry) => entry.resource)
@@ -1894,7 +1894,7 @@ class FhirSubmissionBackend implements SubmissionBackend {
     searchCompleted.set('questionnaire', canonical);
     searchCompleted.set('status', 'completed');
     searchCompleted.set('_count', '50');
-    const completedRes = await this.fhirFetch(`/QuestionnaireResponse?${searchCompleted.toString()}`, user.accessToken);
+    const completedRes = await this.fhirFetch(`/QuestionnaireResponse?${searchCompleted.toString()}`);
     const completedBundle = await completedRes.json() as FhirBundle<QuestionnaireResponse>;
     const completedList = (completedBundle.entry ?? [])
       .map((entry) => entry.resource)
@@ -1961,7 +1961,7 @@ class FhirSubmissionBackend implements SubmissionBackend {
   ): Promise<QuestionnaireResponse> {
     const payload = await documentToQuestionnaireResponse(questionnaire, document, 'completed');
     this.applySubject(payload, user);
-    return this.upsertQuestionnaireResponse(user.accessToken, payload, responseId ?? undefined);
+    return this.upsertQuestionnaireResponse(payload, responseId ?? undefined);
   }
 
   private applySubject(payload: QuestionnaireResponse, user: AuthenticatedUser) {
@@ -1981,30 +1981,28 @@ class FhirSubmissionBackend implements SubmissionBackend {
   ) {
     const payload = await documentToQuestionnaireResponse(questionnaire, document, 'in-progress');
     this.applySubject(payload, user);
-    return this.upsertQuestionnaireResponse(user.accessToken, payload);
+    return this.upsertQuestionnaireResponse(payload);
   }
 
   private async upsertQuestionnaireResponse(
-    accessToken: string,
     payload: QuestionnaireResponse,
     existingId?: string
   ): Promise<QuestionnaireResponse> {
     const method = existingId ? 'PUT' : 'POST';
     const path = existingId ? `/QuestionnaireResponse/${existingId}` : '/QuestionnaireResponse';
-    const res = await this.fhirFetch(path, accessToken, {
+    const res = await this.fhirFetch(path, {
       method,
       body: JSON.stringify(payload)
     });
     return (await res.json()) as QuestionnaireResponse;
   }
 
-  private async fhirFetch(path: string, accessToken: string, init: RequestInit = {}): Promise<Response> {
+  private async fhirFetch(path: string, init: RequestInit = {}): Promise<Response> {
     const config = await getAppConfig();
     const base = config.fhirBaseUrl.replace(/\/$/, '');
     const url = path.startsWith('http') ? path : `${base}${path.startsWith('/') ? path : `/${path}`}`;
     const headers = new Headers(init.headers as HeadersInit | undefined);
     headers.set('Accept', 'application/fhir+json');
-    headers.set('Authorization', `Bearer ${accessToken}`);
     if (init.body && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/fhir+json');
     }
