@@ -51,10 +51,10 @@ async function writeConfig() {
     throw new Error('Expected frontend/dist to exist after build.');
   }
   const config = {
-    fhirBaseUrl: '',
-    oidcIssuer: null,
-    oidcClientId: null,
-    oidcRedirectUri: null,
+    fhirBaseUrl: process.env.FHIR_BASE_URL ?? '',
+    oidcIssuer: process.env.OIDC_ISSUER ?? null,
+    oidcClientId: process.env.OIDC_CLIENT_ID ?? null,
+    oidcRedirectUri: process.env.OIDC_REDIRECT_URI ?? null,
     mockAuth: process.env.MOCK_AUTH === 'true',
     staticMode: true,
     questionnaire: {
