@@ -19,7 +19,8 @@ import {
   clearStoredTokens,
   setStoredTokens,
   startLogin as oauthStartLogin,
-  handleRedirect
+  handleRedirect,
+  fetchUserInfo
 } from './oauth';
 
 declare global {
@@ -585,7 +586,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     navigate(target, { replace: true });
   }, [navigate]);
 
-  const establishAuthFromTokens = useCallback((tokens: StoredTokens | null) => {
+  const establishAuthFromTokens = useCallback(async (tokens: StoredTokens | null) => {
     if (!tokens) {
       clearStoredTokens();
       setUser(null);
@@ -609,20 +610,31 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       questionnaire: null,
       questionnaireResource: null
     } satisfies AppConfig;
+    let claims = idClaims ?? {};
+
+    const missingDisplayName = !getClaim(claims, 'name') && !getClaim(claims, 'preferred_username');
+    const missingEmail = !getClaim(claims, 'email');
+    const needsProfileClaims = missingDisplayName || missingEmail;
+    if (!config.mockAuth && needsProfileClaims && tokens.accessToken) {
+      const userInfo = await fetchUserInfo(tokens.accessToken);
+      if (userInfo) {
+        claims = { ...userInfo, ...claims };
+      }
+    }
     const sub =
-      getClaim(idClaims, 'sub') ??
+      getClaim(claims, 'sub') ??
       'anonymous';
     const issuerCandidate =
-      getClaim(idClaims, 'iss') ??
+      getClaim(claims, 'iss') ??
       config.oidcIssuer ??
       (config.mockAuth ? 'urn:mock' : '');
     const issuer = issuerCandidate && issuerCandidate.length > 0
       ? issuerCandidate
       : (config.mockAuth ? 'urn:mock' : (config.oidcIssuer ?? ''));
     const displayName =
-      getClaim(idClaims, 'name') ??
-      getClaim(idClaims, 'preferred_username') ??
-      getClaim(idClaims, 'email');
+      getClaim(claims, 'name') ??
+      getClaim(claims, 'preferred_username') ??
+      getClaim(claims, 'email');
 
     const authedUser: AuthenticatedUser = {
       sub,
@@ -645,11 +657,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         const tokens = await handleRedirect();
         if (tokens) {
-          establishAuthFromTokens(tokens);
+          await establishAuthFromTokens(tokens);
           performPostLoginRedirect();
           return;
         }
-        establishAuthFromTokens(getStoredTokens());
+        await establishAuthFromTokens(getStoredTokens());
         performPostLoginRedirect();
       } catch (error) {
         console.error('Authentication error', error);
@@ -680,7 +692,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         const claims = { ...defaults, sub, email, name } satisfies Record<string, unknown>;
         const tokens = createMockTokens(claims, config);
         setStoredTokens(tokens);
-        establishAuthFromTokens(tokens);
+        await establishAuthFromTokens(tokens);
         performPostLoginRedirect();
         return;
       }

@@ -30,6 +30,7 @@ export type OidcMetadata = {
   issuer?: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  userinfo_endpoint?: string;
 };
 
 export type StoredTokens = {
@@ -77,6 +78,27 @@ export async function getMetadata(): Promise<OidcMetadata> {
   if (!response.ok) throw new Error('Failed to load OIDC metadata');
   metadataCache = await response.json() as OidcMetadata;
   return metadataCache;
+}
+
+export async function fetchUserInfo(accessToken: string): Promise<Record<string, unknown> | null> {
+  if (!accessToken) return null;
+  try {
+    const metadata = await getMetadata();
+    const endpoint = metadata.userinfo_endpoint;
+    if (!endpoint) return null;
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!response.ok) {
+      console.warn('UserInfo request failed', response.status);
+      return null;
+    }
+    const data = await response.json() as Record<string, unknown>;
+    return data;
+  } catch (error) {
+    console.error('Unable to load userinfo', error);
+    return null;
+  }
 }
 
 export function getStoredTokens(): StoredTokens | null {
